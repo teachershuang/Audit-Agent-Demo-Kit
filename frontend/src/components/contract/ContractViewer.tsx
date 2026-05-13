@@ -84,6 +84,11 @@ export function ContractViewer({
           ref={containerRef}
           className="thin-scrollbar min-h-0 overflow-y-auto rounded-[24px] border border-white/8 bg-slate-950/30 p-4"
         >
+          {activeEvidence ? (
+            <div className="mb-4 rounded-2xl border border-cyan-400/18 bg-cyan-400/[0.08] px-4 py-3 text-sm text-cyan-50">
+              当前高亮证据：第 {activeEvidence.page} 页，定位到“{activeEvidence.text.slice(0, 42)}”
+            </div>
+          ) : null}
           <div className="mx-auto flex max-w-[980px] flex-col gap-6">
             {pages.map((page) => {
               const scale = zoom;

@@ -26,7 +26,9 @@ export function EvidenceHighlight({
       className={cn(
         "absolute rounded-lg border text-left transition duration-200",
         accent,
-        active ? "shadow-[0_0_0_2px_rgba(255,255,255,0.88),0_0_28px_rgba(67,214,255,0.18)]" : "hover:bg-white/10",
+        active
+          ? "z-20 shadow-[0_0_0_2px_rgba(255,255,255,0.88),0_0_28px_rgba(67,214,255,0.18)]"
+          : "z-10 opacity-0 pointer-events-none",
       )}
       style={{
         left: x * scale,
