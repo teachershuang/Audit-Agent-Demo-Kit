@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from app.schemas.agent import AuditGenerateRequest, AuditGenerateResponse
+from app.storage.local_store import LocalStore
+
+
+def get_audit_router(store: LocalStore, agent):
+    router = APIRouter(prefix="/api/audit", tags=["audit"])
+
+    @router.post("/generate", response_model=AuditGenerateResponse)
+    async def generate_audit(payload: AuditGenerateRequest):
+        try:
+            record = store.get_task(payload.task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Task not found") from exc
+        if not record.result:
+            raise HTTPException(status_code=404, detail="Result not generated")
+
+        artifacts = await agent.analyze(
+            task_id=record.task.taskId,
+            file_name=record.task.fileName,
+            model_name=record.task.modelName,
+            relations=payload.relations,
+            use_sample=record.use_sample,
+            file_path=record.file_path,
+        )
+        store.set_relations(payload.relations)
+        store.save_result(
+            task_id=payload.task_id,
+            result=artifacts.result,
+            audit_focuses=artifacts.audit_focuses,
+            verification_items=artifacts.verification_items,
+            agent_steps=artifacts.agent_steps,
+        )
+        return AuditGenerateResponse(
+            auditFocuses=artifacts.audit_focuses,
+            verificationItems=artifacts.verification_items,
+            agentSteps=artifacts.agent_steps,
+        )
+
+    return router

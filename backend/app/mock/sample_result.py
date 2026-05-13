@@ -1,0 +1,648 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from app.schemas.agent import AgentStep, AgentStepStatus
+from app.schemas.audit import AuditFocus, RiskLevel, VerificationItem, VerificationStatus
+from app.schemas.contract import (
+    ClauseTag,
+    ConfidenceOverview,
+    ContractAnalysisResult,
+    ContractPage,
+    ContractSection,
+    ContractTask,
+    DocumentBlock,
+    EvidenceRef,
+    TaskStatus,
+)
+from app.schemas.relation import RelationConfig, RelationPriority, RelationToolSource
+
+
+def build_mock_relations() -> list[RelationConfig]:
+    return [
+        RelationConfig(
+            id="relation_001",
+            name="疑似内部关联交易",
+            description="识别甲乙方、供应商、项目与账户信息中可能存在的关联交易线索。",
+            enabled=True,
+            riskPrompt="请基于合同主体、项目和账户线索判断是否存在疑似内部关联交易方向，仅输出待核验事项。",
+            toolSource=[
+                RelationToolSource.MODEL_INFERENCE,
+                RelationToolSource.KNOWLEDGE_GRAPH_FUTURE,
+                RelationToolSource.ENTERPRISE_RELATION_FUTURE,
+            ],
+            priority=RelationPriority.HIGH,
+        ),
+        RelationConfig(
+            id="relation_002",
+            name="合同-付款节点关系",
+            description="分析合同金额、付款比例与验收节点是否匹配。",
+            enabled=True,
+            riskPrompt="关注付款比例、付款触发条件与验收条款之间是否存在前置付款风险。",
+            toolSource=[
+                RelationToolSource.MODEL_INFERENCE,
+                RelationToolSource.RULE_ENGINE_FUTURE,
+                RelationToolSource.RPA_API_FUTURE,
+            ],
+            priority=RelationPriority.HIGH,
+        ),
+        RelationConfig(
+            id="relation_003",
+            name="供应商关系待核验",
+            description="检查供应商名称、股东、法人和账户信息是否需要外部关系库核验。",
+            enabled=True,
+            riskPrompt="如合同文本出现集团内部名称相似性或账户异常，请提示需要接入主数据与企业关系库。",
+            toolSource=[
+                RelationToolSource.MODEL_INFERENCE,
+                RelationToolSource.ENTERPRISE_RELATION_FUTURE,
+                RelationToolSource.INTERNAL_MASTER_DATA_FUTURE,
+            ],
+            priority=RelationPriority.MEDIUM,
+        ),
+    ]
+
+
+def build_mock_pages() -> list[ContractPage]:
+    return [
+        ContractPage(
+            page=1,
+            title="合同主体信息",
+            width=900,
+            height=1260,
+            blocks=[
+                DocumentBlock(id="p1-b1", text="信息化系统实施服务合同", x=120, y=90, width=520, emphasis=True),
+                DocumentBlock(id="p1-b2", text="甲方：华东智联能源集团有限公司", x=120, y=180, width=420),
+                DocumentBlock(id="p1-b3", text="乙方：上海智衡数科技术有限公司", x=120, y=225, width=420),
+                DocumentBlock(id="p1-b4", text="项目名称：供应链风控平台建设", x=120, y=290, width=420),
+            ],
+            evidences=[
+                EvidenceRef(
+                    id="ev_section_subject",
+                    page=1,
+                    bbox=(108, 160, 640, 220),
+                    text="甲方与乙方主体信息",
+                    sourceType="section",
+                    sourceId="section_001",
+                ),
+                EvidenceRef(
+                    id="ev_clause_party",
+                    page=1,
+                    bbox=(108, 168, 660, 210),
+                    text="甲方：华东智联能源集团有限公司；乙方：上海智衡数科技术有限公司。",
+                    sourceType="clause",
+                    sourceId="clause_001",
+                ),
+            ],
+        ),
+        ContractPage(
+            page=2,
+            title="服务范围与期限",
+            width=900,
+            height=1260,
+            blocks=[
+                DocumentBlock(id="p2-b1", text="二、服务内容", x=120, y=130, width=240, emphasis=True),
+                DocumentBlock(
+                    id="p2-b2",
+                    text="乙方负责完成合同管理中心、付款节点稽核模块、供应商关系洞察模块的设计、开发与部署。",
+                    x=120,
+                    y=220,
+                    width=650,
+                ),
+            ],
+            evidences=[
+                EvidenceRef(
+                    id="ev_section_scope",
+                    page=2,
+                    bbox=(105, 118, 660, 180),
+                    text="二、服务内容",
+                    sourceType="section",
+                    sourceId="section_002",
+                ),
+                EvidenceRef(
+                    id="ev_clause_scope",
+                    page=2,
+                    bbox=(112, 206, 690, 150),
+                    text="乙方负责完成合同管理中心、付款节点稽核模块、供应商关系洞察模块的设计、开发与部署。",
+                    sourceType="clause",
+                    sourceId="clause_004",
+                ),
+            ],
+        ),
+        ContractPage(
+            page=3,
+            title="合同金额与付款方式",
+            width=900,
+            height=1260,
+            blocks=[
+                DocumentBlock(id="p3-b1", text="四、合同金额与付款方式", x=120, y=130, width=360, emphasis=True),
+                DocumentBlock(id="p3-b2", text="合同总金额：人民币 2,480,000 元（含税）", x=120, y=230, width=460),
+                DocumentBlock(
+                    id="p3-b3",
+                    text="合同签订后支付 30%；验收通过后支付 60%；剩余 10% 作为质保金。",
+                    x=120,
+                    y=315,
+                    width=680,
+                ),
+                DocumentBlock(
+                    id="p3-b4",
+                    text="付款资料包括增值税专用发票、阶段成果确认单与付款申请。",
+                    x=120,
+                    y=450,
+                    width=620,
+                ),
+            ],
+            evidences=[
+                EvidenceRef(
+                    id="ev_section_payment",
+                    page=3,
+                    bbox=(108, 112, 700, 180),
+                    text="四、合同金额与付款方式",
+                    sourceType="section",
+                    sourceId="section_003",
+                ),
+                EvidenceRef(
+                    id="ev_clause_amount",
+                    page=3,
+                    bbox=(112, 214, 520, 78),
+                    text="合同总金额：人民币 2,480,000 元（含税）",
+                    sourceType="clause",
+                    sourceId="clause_002",
+                    accent="amber",
+                ),
+                EvidenceRef(
+                    id="ev_clause_payment",
+                    page=3,
+                    bbox=(112, 298, 706, 118),
+                    text="合同签订后支付 30%；验收通过后支付 60%；剩余 10% 作为质保金。",
+                    sourceType="clause",
+                    sourceId="clause_003",
+                ),
+                EvidenceRef(
+                    id="ev_clause_account",
+                    page=3,
+                    bbox=(112, 432, 650, 88),
+                    text="付款资料包括发票、阶段成果确认单与付款申请。",
+                    sourceType="clause",
+                    sourceId="clause_010",
+                    accent="amber",
+                ),
+            ],
+        ),
+        ContractPage(
+            page=4,
+            title="验收与违约责任",
+            width=900,
+            height=1260,
+            blocks=[
+                DocumentBlock(id="p4-b1", text="五、验收标准", x=120, y=125, width=240, emphasis=True),
+                DocumentBlock(
+                    id="p4-b2",
+                    text="系统需完成联调测试、上线试运行，并由甲方签署阶段验收确认单后视为通过。",
+                    x=120,
+                    y=220,
+                    width=660,
+                ),
+                DocumentBlock(id="p4-b3", text="六、违约责任", x=120, y=380, width=240, emphasis=True),
+                DocumentBlock(
+                    id="p4-b4",
+                    text="乙方逾期交付每日按合同总额 0.3% 承担违约责任；甲方逾期付款需支付违约金。",
+                    x=120,
+                    y=470,
+                    width=690,
+                ),
+            ],
+            evidences=[
+                EvidenceRef(
+                    id="ev_section_acceptance",
+                    page=4,
+                    bbox=(108, 108, 660, 180),
+                    text="五、验收标准",
+                    sourceType="section",
+                    sourceId="section_004",
+                ),
+                EvidenceRef(
+                    id="ev_clause_acceptance",
+                    page=4,
+                    bbox=(112, 204, 696, 120),
+                    text="系统需完成联调测试、上线试运行，并由甲方签署阶段验收确认单后视为通过。",
+                    sourceType="clause",
+                    sourceId="clause_005",
+                ),
+                EvidenceRef(
+                    id="ev_clause_liability",
+                    page=4,
+                    bbox=(112, 454, 708, 118),
+                    text="乙方逾期交付每日按合同总额 0.3% 承担违约责任。",
+                    sourceType="clause",
+                    sourceId="clause_006",
+                    accent="amber",
+                ),
+            ],
+        ),
+    ]
+
+
+def build_mock_sections() -> list[ContractSection]:
+    return [
+        ContractSection(
+            id="section_001",
+            title="一、合同主体信息",
+            level=1,
+            page=1,
+            summary="识别甲乙双方、项目名称与履约地点，为后续关系核验提供主体基础。",
+            confidence=0.93,
+            evidenceId="ev_section_subject",
+        ),
+        ContractSection(
+            id="section_002",
+            title="二、服务内容",
+            level=1,
+            page=2,
+            summary="约定系统建设范围，包括合同管理、付款节点稽核与供应商关系洞察模块。",
+            confidence=0.9,
+            evidenceId="ev_section_scope",
+        ),
+        ContractSection(
+            id="section_003",
+            title="四、合同金额与付款方式",
+            level=1,
+            page=3,
+            summary="明确合同总金额、分期付款比例和付款条件。",
+            confidence=0.91,
+            evidenceId="ev_section_payment",
+        ),
+        ContractSection(
+            id="section_004",
+            title="五、验收标准",
+            level=1,
+            page=4,
+            summary="以联调测试、试运行及甲方签署验收单作为验收依据。",
+            confidence=0.89,
+            evidenceId="ev_section_acceptance",
+        ),
+    ]
+
+
+def build_mock_clauses() -> list[ClauseTag]:
+    return [
+        ClauseTag(
+            id="clause_001",
+            label="甲乙方信息",
+            title="合同主体信息",
+            summary="识别甲方为集团型企业、乙方为技术服务供应商。",
+            rawText="甲方：华东智联能源集团有限公司；乙方：上海智衡数科技术有限公司。",
+            page=1,
+            confidence=0.95,
+            evidenceId="ev_clause_party",
+            relatedAuditFocusIds=["audit_004", "audit_008"],
+        ),
+        ClauseTag(
+            id="clause_002",
+            label="合同金额",
+            title="合同金额",
+            summary="合同总金额为 248 万元含税。",
+            rawText="合同总金额：人民币 2,480,000 元（含税）。",
+            page=3,
+            confidence=0.94,
+            evidenceId="ev_clause_amount",
+            relatedAuditFocusIds=["audit_001", "audit_003"],
+        ),
+        ClauseTag(
+            id="clause_003",
+            label="付款条件",
+            title="合同金额与付款方式",
+            summary="分三期付款，首付款 30%，验收后 60%，10% 质保金。",
+            rawText="合同签订后 10 个工作日内支付 30%；验收通过后支付 60%；剩余 10% 作为质保金。",
+            page=3,
+            confidence=0.82,
+            evidenceId="ev_clause_payment",
+            needHumanReview=True,
+            relatedAuditFocusIds=["audit_001", "audit_002", "audit_010"],
+        ),
+        ClauseTag(
+            id="clause_004",
+            label="服务/采购/工程内容",
+            title="服务内容",
+            summary="乙方交付合同管理中心、付款节点稽核模块和供应商关系洞察模块。",
+            rawText="乙方负责完成合同管理中心、付款节点稽核模块、供应商关系洞察模块的设计、开发与部署。",
+            page=2,
+            confidence=0.9,
+            evidenceId="ev_clause_scope",
+            relatedAuditFocusIds=["audit_012"],
+        ),
+        ClauseTag(
+            id="clause_005",
+            label="验收标准",
+            title="验收标准",
+            summary="需完成联调、试运行并签署验收确认单。",
+            rawText="系统需完成联调测试、上线试运行，并由甲方签署阶段验收确认单后视为通过。",
+            page=4,
+            confidence=0.87,
+            evidenceId="ev_clause_acceptance",
+            relatedAuditFocusIds=["audit_002", "audit_011"],
+        ),
+        ClauseTag(
+            id="clause_006",
+            label="违约责任",
+            title="违约责任",
+            summary="约定乙方逾期交付和甲方逾期付款的违约责任。",
+            rawText="乙方逾期交付每日按合同总额 0.3% 承担违约责任；甲方逾期付款需支付违约金。",
+            page=4,
+            confidence=0.88,
+            evidenceId="ev_clause_liability",
+            relatedAuditFocusIds=["audit_003"],
+        ),
+        ClauseTag(
+            id="clause_010",
+            label="账户信息",
+            title="付款资料",
+            summary="付款需提供发票、成果确认单和付款申请，但未展示收款账户校验信息。",
+            rawText="付款资料包括增值税专用发票、阶段成果确认单与付款申请。",
+            page=3,
+            confidence=0.71,
+            evidenceId="ev_clause_account",
+            needHumanReview=True,
+            relatedAuditFocusIds=["audit_007", "audit_009"],
+        ),
+    ]
+
+
+def build_mock_confidence() -> ConfidenceOverview:
+    return ConfidenceOverview(overall=0.86, sections=0.91, clauses=0.87, audit=0.79, warnings=4)
+
+
+def build_mock_task(task_id: str, file_name: str, model_name: str) -> ContractTask:
+    return ContractTask(
+        taskId=task_id,
+        fileName=file_name,
+        status=TaskStatus.NEEDS_REVIEW,
+        createdAt=datetime.now().astimezone().isoformat(timespec="seconds"),
+        modelName=model_name,
+        confidenceOverview=build_mock_confidence(),
+    )
+
+
+def build_mock_result(task_id: str, file_name: str, model_name: str) -> ContractAnalysisResult:
+    return ContractAnalysisResult(
+        task=build_mock_task(task_id=task_id, file_name=file_name, model_name=model_name),
+        pages=build_mock_pages(),
+        sections=build_mock_sections(),
+        clauses=build_mock_clauses(),
+    )
+
+
+def build_mock_audit_focuses(enabled_relations: list[str] | None = None) -> list[AuditFocus]:
+    enabled = set(enabled_relations or ["relation_001", "relation_002", "relation_003"])
+    items = [
+        AuditFocus(
+            id="audit_001",
+            title="付款条件是否明确",
+            riskLevel=RiskLevel.MEDIUM,
+            reason="已识别分期付款比例，但首付款触发条件未绑定明确里程碑，存在前置付款解释空间。",
+            evidenceClauseIds=["clause_003"],
+            locationText="第 3 页 - 合同金额与付款方式",
+            confidence=0.81,
+            dependsOn=["合同金额", "付款条件", "验收标准"],
+            currentBasis="当前仅基于合同文本和模型推理",
+            futureTools=["规则引擎", "付款系统 API", "验收单据库"],
+            humanReviewSuggestion="建议复核首付款是否需要项目启动证明或立项批复作为前置条件。",
+        ),
+        AuditFocus(
+            id="audit_002",
+            title="是否存在无验收付款风险",
+            riskLevel=RiskLevel.PENDING_VERIFICATION,
+            reason="合同约定第二笔付款与验收挂钩，但首付款部分未明确与验收节点关联，需要进一步核验付款控制策略。",
+            evidenceClauseIds=["clause_003", "clause_005"],
+            locationText="第 3-4 页 - 付款条件 / 验收标准",
+            confidence=0.77,
+            dependsOn=["付款条件", "验收标准"],
+            currentBasis="基于合同条款交叉比对",
+            futureTools=["规则引擎", "RPA/API 查询", "付款审批流"],
+            humanReviewSuggestion="建议核验首付款审批条件与验收凭证是否纳入付款审批控制。",
+        ),
+        AuditFocus(
+            id="audit_003",
+            title="合同金额与违约责任是否匹配",
+            riskLevel=RiskLevel.LOW,
+            reason="合同金额和违约责任条款均已识别，违约责任覆盖交付和付款两侧，整体完整度较高。",
+            evidenceClauseIds=["clause_002", "clause_006"],
+            locationText="第 3-4 页 - 金额 / 违约责任",
+            confidence=0.88,
+            dependsOn=["合同金额", "违约责任"],
+            currentBasis="模型条款识别 + 关键词命中",
+            futureTools=["规则引擎"],
+            humanReviewSuggestion="可进一步复核违约责任上限与损失赔偿边界。",
+        ),
+        AuditFocus(
+            id="audit_004",
+            title="合同主体信息是否完整",
+            riskLevel=RiskLevel.MEDIUM,
+            reason="已识别主体名称和项目名称，但未在展示页中看到统一社会信用代码、授权代表或签章页信息。",
+            evidenceClauseIds=["clause_001"],
+            locationText="第 1 页 - 合同主体信息",
+            confidence=0.74,
+            dependsOn=["甲乙方信息"],
+            currentBasis="当前仅基于合同首页文本推断",
+            futureTools=["OCR 全页解析", "主数据校验", "合同系统"],
+            humanReviewSuggestion="建议核对主体证照、统一社会信用代码及签署授权是否完整。",
+        ),
+        AuditFocus(
+            id="audit_007",
+            title="是否存在账户信息异常",
+            riskLevel=RiskLevel.PENDING_VERIFICATION,
+            reason="合同展示了付款资料要求，但未展示完整收款账户字段，无法确认账户是否与供应商主数据一致。",
+            evidenceClauseIds=["clause_010"],
+            locationText="第 3 页 - 付款资料",
+            confidence=0.69,
+            dependsOn=["账户信息", "供应商名称"],
+            currentBasis="当前仅基于合同文本推断",
+            futureTools=["供应商主数据", "付款系统 API", "银行账户校验"],
+            humanReviewSuggestion="建议接入供应商主数据和银行账户校验服务进一步核验。",
+        ),
+        AuditFocus(
+            id="audit_008",
+            title="疑似内部关联交易核验",
+            riskLevel=RiskLevel.PENDING_VERIFICATION,
+            reason="乙方名称与甲方集团业务场景高度接近，且合同文本未披露关联关系说明；当前只能作为疑似关注方向。",
+            evidenceClauseIds=["clause_001"],
+            locationText="第 1 页 - 合同主体信息",
+            confidence=0.64,
+            dependsOn=["合同主体信息", "供应商名称", "项目背景"],
+            currentBasis="当前仅基于合同文本和模型推理",
+            futureTools=["知识图谱", "企业工商数据", "集团内部供应商主数据"],
+            humanReviewSuggestion="建议审计人员结合企业关系图谱和供应商主数据进一步核验。",
+        ),
+        AuditFocus(
+            id="audit_009",
+            title="是否存在供应商关系需要核验",
+            riskLevel=RiskLevel.PENDING_VERIFICATION,
+            reason="当前未接入供应商历史履约记录、股东与法定代表人关系数据，需补充外部核验。",
+            evidenceClauseIds=["clause_001", "clause_010"],
+            locationText="第 1 / 3 页 - 主体信息 / 付款资料",
+            confidence=0.72,
+            dependsOn=["供应商名称", "账户信息"],
+            currentBasis="仅基于合同文本和已配置关系项",
+            futureTools=["企业工商数据", "供应商主数据", "知识图谱路径查询"],
+            humanReviewSuggestion="建议核对供应商股东、法人、实际控制人与经办审批链是否存在交叉。",
+        ),
+        AuditFocus(
+            id="audit_010",
+            title="是否存在超前付款风险",
+            riskLevel=RiskLevel.MEDIUM,
+            reason="首付款比例为 30%，触发条件仅为合同签订完成，未见更细粒度交付前置约束。",
+            evidenceClauseIds=["clause_003"],
+            locationText="第 3 页 - 付款条件",
+            confidence=0.8,
+            dependsOn=["付款条件"],
+            currentBasis="模型条款识别 + 规则预留思路",
+            futureTools=["规则引擎", "付款审批流", "项目里程碑系统"],
+            humanReviewSuggestion="建议结合预算控制和项目启动证明，复核首付款合理性。",
+        ),
+    ]
+    filtered: list[AuditFocus] = []
+    for item in items:
+        if item.id == "audit_008" and "relation_001" not in enabled:
+            continue
+        if item.id in {"audit_001", "audit_002", "audit_010"} and "relation_002" not in enabled:
+            continue
+        if item.id == "audit_009" and "relation_003" not in enabled:
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def build_mock_verification_items() -> list[VerificationItem]:
+    return [
+        VerificationItem(
+            id="verify_001",
+            name="章节结构校验",
+            method="章节标题识别 + 页码定位 + 原文证据映射",
+            status=VerificationStatus.PASS,
+            description="已识别主体、服务、付款、验收等核心章节，并建立页码映射。",
+            relatedClauseIds=["clause_001", "clause_003"],
+            relatedEvidenceIds=["ev_section_subject", "ev_section_payment"],
+        ),
+        VerificationItem(
+            id="verify_002",
+            name="付款条件完整性校验",
+            method="条款标签识别 + 关键词匹配 + 原文证据定位",
+            status=VerificationStatus.WARNING,
+            description="识别到付款比例和节点，但首付款未发现更细粒度交付前置条件。",
+            relatedClauseIds=["clause_003"],
+            relatedEvidenceIds=["ev_clause_payment"],
+        ),
+        VerificationItem(
+            id="verify_003",
+            name="验收标准一致性校验",
+            method="模型语义比对 + 关键词命中",
+            status=VerificationStatus.PASS,
+            description="验收条款包含联调、试运行和签署确认单等关键表达。",
+            relatedClauseIds=["clause_005"],
+            relatedEvidenceIds=["ev_clause_acceptance"],
+        ),
+        VerificationItem(
+            id="verify_004",
+            name="内部关联交易识别",
+            method="模型推理",
+            status=VerificationStatus.EXTERNAL_PENDING,
+            description="当前未接入企业关系库和知识图谱，无法确认真实关联关系，仅输出待核验方向。",
+            relatedClauseIds=["clause_001"],
+            relatedEvidenceIds=["ev_clause_party"],
+            needExternalTool=True,
+        ),
+    ]
+
+
+def build_mock_agent_steps(file_name: str) -> list[AgentStep]:
+    return [
+        AgentStep(
+            id="step_001",
+            name="接收上传文件",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=136,
+            inputSummary=file_name,
+            outputSummary="生成任务并归档文件元数据",
+            tool="upload_handler",
+            success=True,
+        ),
+        AgentStep(
+            id="step_002",
+            name="判断文件类型",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=92,
+            inputSummary="PDF 文档",
+            outputSummary="文本型 PDF，优先走文本抽取链路",
+            tool="document_service",
+            success=True,
+        ),
+        AgentStep(
+            id="step_003",
+            name="文档预处理",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=242,
+            inputSummary="页级内容预处理",
+            outputSummary="生成页级 block 与坐标占位数据",
+            tool="document_service",
+            success=True,
+        ),
+        AgentStep(
+            id="step_004",
+            name="OCR / 文本抽取",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=188,
+            inputSummary="mock text blocks",
+            outputSummary="提取 13 个文本块",
+            tool="mock_ocr_tool",
+            success=True,
+        ),
+        AgentStep(
+            id="step_005",
+            name="章节结构识别",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=624,
+            inputSummary="页级文本块",
+            outputSummary="识别 4 个核心章节",
+            tool="qwen_or_mock",
+            success=True,
+        ),
+        AgentStep(
+            id="step_006",
+            name="条款标签识别",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=732,
+            inputSummary="合同全文",
+            outputSummary="生成 7 条关键条款标签",
+            tool="qwen_or_mock",
+            success=True,
+        ),
+        AgentStep(
+            id="step_007",
+            name="关系条目分析",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=305,
+            inputSummary="启用关系配置",
+            outputSummary="装载高优先级关系提示词",
+            tool="relation_config_service",
+            success=True,
+        ),
+        AgentStep(
+            id="step_008",
+            name="审计关注方向生成",
+            status=AgentStepStatus.WARNING,
+            durationMs=812,
+            inputSummary="条款标签 + 关系配置",
+            outputSummary="生成审计关注方向并标记待外部数据核验项",
+            tool="audit_focus_agent",
+            success=True,
+        ),
+        AgentStep(
+            id="step_009",
+            name="异构校验",
+            status=AgentStepStatus.SUCCESS,
+            durationMs=266,
+            inputSummary="章节/条款/关注点结果",
+            outputSummary="输出校验记录",
+            tool="verification_agent",
+            success=True,
+        ),
+    ]
