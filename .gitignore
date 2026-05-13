@@ -3,6 +3,7 @@ Thumbs.db
 
 frontend/node_modules/
 frontend/dist/
+.playwright-mcp/
 
 backend/.venv/
 backend/__pycache__/
