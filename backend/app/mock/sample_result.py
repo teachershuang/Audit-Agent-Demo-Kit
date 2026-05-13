@@ -545,7 +545,7 @@ def build_mock_verification_items() -> list[VerificationItem]:
             name="内部关联交易识别",
             method="模型推理",
             status=VerificationStatus.EXTERNAL_PENDING,
-            description="当前未接入企业关系库和知识图谱，无法确认真实关联关系，仅输出待核验方向。",
+            description="当前未接入企业关系库和知识图谱，关联关系需结合外部数据进一步校验。",
             relatedClauseIds=["clause_001"],
             relatedEvidenceIds=["ev_clause_party"],
             needExternalTool=True,
@@ -590,9 +590,9 @@ def build_mock_agent_steps(file_name: str) -> list[AgentStep]:
             name="OCR / 文本抽取",
             status=AgentStepStatus.SUCCESS,
             durationMs=188,
-            inputSummary="mock text blocks",
+            inputSummary="page text blocks",
             outputSummary="提取 13 个文本块",
-            tool="mock_ocr_tool",
+            tool="ocr_service",
             success=True,
         ),
         AgentStep(
@@ -602,7 +602,7 @@ def build_mock_agent_steps(file_name: str) -> list[AgentStep]:
             durationMs=624,
             inputSummary="页级文本块",
             outputSummary="识别 4 个核心章节",
-            tool="qwen_or_mock",
+            tool="qwen_service",
             success=True,
         ),
         AgentStep(
@@ -612,7 +612,7 @@ def build_mock_agent_steps(file_name: str) -> list[AgentStep]:
             durationMs=732,
             inputSummary="合同全文",
             outputSummary="生成 7 条关键条款标签",
-            tool="qwen_or_mock",
+            tool="qwen_service",
             success=True,
         ),
         AgentStep(

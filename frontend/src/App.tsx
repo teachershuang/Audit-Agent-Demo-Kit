@@ -1,8 +1,8 @@
 import { useEffect } from "react";
-import { AppShell } from "./components/layout/AppShell";
-import { HeaderBar } from "./components/layout/HeaderBar";
 import { AnalysisTabs } from "./components/analysis/AnalysisTabs";
 import { ContractViewer } from "./components/contract/ContractViewer";
+import { AppShell } from "./components/layout/AppShell";
+import { HeaderBar } from "./components/layout/HeaderBar";
 import { EmptyState } from "./components/shared/EmptyState";
 import { LoadingState } from "./components/shared/LoadingState";
 import { useContractStore } from "./store/contractStore";
@@ -48,12 +48,12 @@ function App() {
 
   const leftPanel = !result ? (
     isBusy ? (
-      <LoadingState label="正在启动 Agent 解析链路..." />
+      <LoadingState label="正在启动解析任务..." />
     ) : (
       <EmptyState
-        title="上传合同或直接加载示例"
-        description="第一版 demo 支持使用 mock 合同直接演示完整流程，也支持上传 PDF / 图片触发后端 Agent 解析接口。"
-        actionLabel="加载示例合同"
+        title="上传合同开始分析"
+        description="支持 PDF 与图片合同，上传后进入结构解析、条款识别与证据定位。"
+        actionLabel="快速载入"
         onAction={() => void loadSample()}
       />
     )
@@ -72,8 +72,8 @@ function App() {
       <LoadingState label="等待解析结果..." />
     ) : (
       <EmptyState
-        title="解析结果区待激活"
-        description="Agent 完成章节识别、条款标签、关注方向和证据链构建后，右侧将展示完整工作台视图。"
+        title="结果区待加载"
+        description="完成解析后将在此显示章节、条款、关系配置、关注事项与证据链。"
       />
     )
   ) : (
@@ -115,26 +115,24 @@ function App() {
           <div className="mt-2 text-sm text-white">{result.task.taskId}</div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Agent 执行状态</div>
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Agent 状态</div>
           <div className="mt-2 text-sm text-white">
-            {agentSteps.length} 个步骤已装载，{verificationItems.filter((item) => item.needExternalTool).length} 项待外部数据核验
+            {agentSteps.length} 个步骤已完成，{verificationItems.filter((item) => item.needExternalTool).length} 项待进一步校验
           </div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">模型调用说明</div>
-          <div className="mt-2 text-sm text-white">Qwen / Mock Hybrid，输出均要求可回溯至原文证据。</div>
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">模型服务</div>
+          <div className="mt-2 text-sm text-white">{result.task.modelName}</div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">当前限制</div>
-          <div className="mt-2 text-sm text-white">
-            未接入规则引擎、知识图谱、企业工商库，相关结论均仅作关注方向。
-          </div>
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">证据链</div>
+          <div className="mt-2 text-sm text-white">结果与原文位置同步映射</div>
         </div>
       </div>
     </footer>
   ) : (
     <footer className="rounded-[24px] border border-dashed border-white/8 px-5 py-4 text-sm text-slate-400">
-      Agent cockpit 已就绪，等待上传合同或加载示例。
+      工作台已就绪
     </footer>
   );
 

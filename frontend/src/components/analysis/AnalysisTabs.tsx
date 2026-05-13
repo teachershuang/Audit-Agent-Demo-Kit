@@ -59,10 +59,8 @@ export function AnalysisTabs({
         <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200/70">
           Audit Intelligence Dashboard
         </p>
-        <h2 className="mt-1 font-display text-xl text-white">智能解析结果区</h2>
-        <p className="mt-2 text-sm text-slate-300">
-          所有结果均要求回到原文。涉及关联交易、账户异常、供应商关系的判断，当前仅视为待核验方向。
-        </p>
+        <h2 className="mt-1 font-display text-xl text-white">智能解析结果</h2>
+        <p className="mt-2 text-sm text-slate-300">章节、条款、证据链与关系配置集中查看。</p>
       </div>
 
       <div className="thin-scrollbar mt-4 flex gap-2 overflow-x-auto pb-2">

@@ -41,7 +41,7 @@ export function HeaderBar({
               合同智能解析与审计关注点 Agent
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              当前输出的是审计关注方向，不是最终审计结论。所有疑似关系均需结合外部数据进一步核验。
+              合同结构、关键条款、证据定位与关注事项统一呈现。
             </p>
           </div>
         </div>
@@ -52,7 +52,7 @@ export function HeaderBar({
               任务状态 {task ? statusMap[task.status] : "待上传"}
             </span>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-              模型 {task?.modelName ?? "Qwen / Mock"}
+              模型 {task?.modelName ?? "Qwen"}
             </span>
             <ConfidenceBadge value={task?.confidenceOverview.overall ?? 0.86} label="总览" />
           </div>
@@ -77,7 +77,7 @@ export function HeaderBar({
               onClick={onLoadSample}
               className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400/24 hover:bg-white/8"
             >
-              加载示例合同
+              快速载入
             </button>
             <button
               type="button"

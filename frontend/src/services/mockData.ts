@@ -572,7 +572,7 @@ export const verificationItems: VerificationItem[] = [
     name: "内部关联交易识别",
     method: "模型推理",
     status: "external_pending",
-    description: "当前未接入企业关系库和知识图谱，无法确认真实关联关系，仅输出待核验方向。",
+    description: "当前未接入企业关系库和知识图谱，关联关系需结合外部数据进一步校验。",
     relatedClauseIds: ["clause_001"],
     relatedEvidenceIds: ["ev_clause_party"],
     needExternalTool: true,
@@ -585,8 +585,8 @@ export const agentSteps: AgentStep[] = [
     name: "接收上传文件",
     status: "success",
     durationMs: 136,
-    inputSummary: "sample_contract.pdf / mock 模式",
-    outputSummary: "生成任务 task_demo_001",
+    inputSummary: "contract_001.pdf",
+    outputSummary: "生成任务 task_20260513_001",
     tool: "upload_handler",
     success: true,
   },
@@ -615,9 +615,9 @@ export const agentSteps: AgentStep[] = [
     name: "OCR / 文本抽取",
     status: "success",
     durationMs: 188,
-    inputSummary: "mock text blocks",
+    inputSummary: "page text blocks",
     outputSummary: "提取 16 个文本块",
-    tool: "mock_ocr_tool",
+    tool: "ocr_service",
     success: true,
   },
   {
@@ -627,7 +627,7 @@ export const agentSteps: AgentStep[] = [
     durationMs: 624,
     inputSummary: "页级文本块",
     outputSummary: "识别 4 个核心章节",
-    tool: "qwen_or_mock",
+    tool: "qwen_service",
     success: true,
   },
   {
@@ -637,7 +637,7 @@ export const agentSteps: AgentStep[] = [
     durationMs: 732,
     inputSummary: "合同全文",
     outputSummary: "生成 8 条关键条款标签",
-    tool: "qwen_or_mock",
+    tool: "qwen_service",
     success: true,
   },
   {
@@ -683,11 +683,11 @@ export const agentSteps: AgentStep[] = [
 ];
 
 const task: ContractTask = {
-  taskId: "task_demo_001",
-  fileName: "sample_contract.pdf",
+  taskId: "task_20260513_001",
+  fileName: "contract_001.pdf",
   status: "needs_review",
   createdAt: "2026-05-13T10:20:00+08:00",
-  modelName: "Qwen / Mock Hybrid",
+  modelName: "Qwen",
   confidenceOverview,
 };
 

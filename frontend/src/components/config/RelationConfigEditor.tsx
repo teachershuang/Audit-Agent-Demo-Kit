@@ -37,9 +37,7 @@ export function RelationConfigEditor({
     <div className="rounded-[24px] border border-white/8 bg-slate-950/30 p-4">
       <div className="mb-4">
         <h3 className="font-display text-lg text-white">{title}</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          当前输出只能给出疑似风险和待核验方向，不能直接写成确定性结论。
-        </p>
+        <p className="mt-1 text-sm text-slate-400">配置分析维度、工具来源与输出优先级。</p>
       </div>
 
       <div className="grid gap-3">
