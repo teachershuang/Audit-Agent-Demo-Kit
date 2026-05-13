@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.audit_focus_agent import AuditFocusAgent
@@ -11,9 +13,11 @@ from app.agents.contract_parser_agent import ContractParserAgent
 from app.agents.planner import Planner
 from app.agents.verification_agent import VerificationAgent
 from app.config import get_settings
+from app.logging_utils import app_logger, json_dumps
 from app.routers.audit import get_audit_router
 from app.routers.config import get_config_router
 from app.routers.contracts import get_contract_router
+from app.routers.logs import get_logs_router
 from app.services.confidence_service import ConfidenceService
 from app.services.document_service import DocumentService
 from app.services.evidence_service import EvidenceService
@@ -60,6 +64,46 @@ app.add_middleware(
 app.include_router(get_contract_router(store=store, agent=contract_agent))
 app.include_router(get_config_router(relation_config_service=relation_config_service))
 app.include_router(get_audit_router(store=store, agent=contract_agent))
+app.include_router(get_logs_router())
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    started = perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((perf_counter() - started) * 1000, 2)
+        app_logger.exception(
+            json_dumps(
+                {
+                    "event": "request_exception",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "query": dict(request.query_params),
+                    "durationMs": duration_ms,
+                    "client": request.client.host if request.client else None,
+                    "error": str(exc),
+                }
+            )
+        )
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    app_logger.info(
+        json_dumps(
+            {
+                "event": "request_completed",
+                "method": request.method,
+                "path": request.url.path,
+                "query": dict(request.query_params),
+                "status": response.status_code,
+                "durationMs": duration_ms,
+                "client": request.client.host if request.client else None,
+            }
+        )
+    )
+    return response
 
 
 @app.get("/health")

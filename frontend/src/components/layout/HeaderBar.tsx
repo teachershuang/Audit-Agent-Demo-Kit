@@ -41,7 +41,7 @@ export function HeaderBar({
               合同智能解析与审计关注点 Agent
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              合同结构、关键条款、证据定位与关注事项统一呈现。
+              合同结构、关键条款、证据定位与审计关注事项统一呈现。
             </p>
           </div>
         </div>
@@ -62,6 +62,7 @@ export function HeaderBar({
               <FileUp className="h-4 w-4" />
               上传合同
               <input
+                id="contract-upload-input"
                 type="file"
                 className="hidden"
                 accept=".pdf,.png,.jpg,.jpeg"
@@ -73,6 +74,7 @@ export function HeaderBar({
               />
             </label>
             <button
+              id="load-example-button"
               type="button"
               onClick={onLoadSample}
               className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400/24 hover:bg-white/8"

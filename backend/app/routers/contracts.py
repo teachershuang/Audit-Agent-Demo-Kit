@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
+from app.logging_utils import app_logger, json_dumps
 from app.schemas.contract import ContractAnalysisResult, UploadResponse
 from app.storage.local_store import LocalStore
 
@@ -19,6 +20,16 @@ def get_contract_router(store: LocalStore, agent):
         use_builtin_example: bool = Form(default=False),
         settings: Settings = Depends(get_settings),
     ) -> UploadResponse:
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "upload_contract_received",
+                    "fileName": file.filename if file else None,
+                    "contentType": file.content_type if file else None,
+                    "useBuiltinExample": use_builtin_example or file is None,
+                }
+            )
+        )
         record = store.create_task(
             file_name=file.filename if file else "example_contract.pdf",
             model_name=settings.qwen_model_name,
@@ -29,8 +40,20 @@ def get_contract_router(store: LocalStore, agent):
         task_dir.mkdir(parents=True, exist_ok=True)
         if file:
             file_path = task_dir / (file.filename or "contract.pdf")
-            file_path.write_bytes(await file.read())
+            content = await file.read()
+            file_path.write_bytes(content)
             record.file_path = file_path
+            app_logger.info(
+                json_dumps(
+                    {
+                        "event": "upload_contract_saved",
+                        "taskId": record.task.taskId,
+                        "fileName": file.filename,
+                        "size": len(content),
+                        "targetPath": str(file_path),
+                    }
+                )
+            )
         return UploadResponse(task_id=record.task.taskId)
 
     @router.get("/{task_id}")
@@ -47,11 +70,38 @@ def get_contract_router(store: LocalStore, agent):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Task not found") from exc
 
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "analyze_contract_started",
+                    "taskId": task_id,
+                    "fileName": record.task.fileName,
+                    "useBuiltinExample": record.use_builtin_example,
+                    "filePath": str(record.file_path) if record.file_path else None,
+                }
+            )
+        )
+
         artifacts = await agent.analyze(
             task=record.task,
             relations=store.list_relations(),
             use_builtin_example=record.use_builtin_example,
             file_path=record.file_path,
+        )
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "analyze_contract_completed",
+                    "taskId": task_id,
+                    "status": artifacts.result.task.status,
+                    "pages": len(artifacts.result.pages),
+                    "sections": len(artifacts.result.sections),
+                    "clauses": len(artifacts.result.clauses),
+                    "keyFacts": len(artifacts.result.keyFacts),
+                    "auditFocuses": len(artifacts.audit_focuses),
+                    "verificationItems": len(artifacts.verification_items),
+                }
+            )
         )
         store.save_result(
             task_id=task_id,

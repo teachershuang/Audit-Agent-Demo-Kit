@@ -35,7 +35,7 @@ class OCRService:
         page_dir.mkdir(parents=True, exist_ok=True)
 
         if preparation.use_builtin_example:
-            return self._build_example_document(task_id=task_id, image_path=task_dir / "example_contract.png")
+            return self._build_example_document(task_id=task_id, image_path=page_dir / "page_001.png")
 
         if preparation.file_type == "pdf" and preparation.source_path:
             return await self._extract_pdf(task_id=task_id, file_path=preparation.source_path, page_dir=page_dir)

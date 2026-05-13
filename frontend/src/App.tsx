@@ -3,6 +3,7 @@ import { AnalysisTabs } from "./components/analysis/AnalysisTabs";
 import { ContractViewer } from "./components/contract/ContractViewer";
 import { AppShell } from "./components/layout/AppShell";
 import { HeaderBar } from "./components/layout/HeaderBar";
+import { ErrorBanner } from "./components/shared/ErrorBanner";
 import { EmptyState } from "./components/shared/EmptyState";
 import { LoadingState } from "./components/shared/LoadingState";
 import { useContractStore } from "./store/contractStore";
@@ -19,6 +20,7 @@ function App() {
     activeEntity,
     selectedEvidenceId,
     isBusy,
+    error,
     boot,
     loadSample,
     uploadAndAnalyze,
@@ -107,6 +109,9 @@ function App() {
     />
   );
 
+  const completedSteps = agentSteps?.length ?? 0;
+  const externalPendingCount = verificationItems?.filter((item) => item.needExternalTool).length ?? 0;
+
   const footer = result ? (
     <footer className="glass-panel rounded-[24px] border border-white/8 px-5 py-4">
       <div className="grid gap-3 md:grid-cols-4">
@@ -117,7 +122,7 @@ function App() {
         <div>
           <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Agent 状态</div>
           <div className="mt-2 text-sm text-white">
-            {agentSteps.length} 个步骤已完成，{verificationItems.filter((item) => item.needExternalTool).length} 项待进一步校验
+            {completedSteps} 个步骤已完成，{externalPendingCount} 项待进一步核验
           </div>
         </div>
         <div>
@@ -139,14 +144,17 @@ function App() {
   return (
     <AppShell
       header={
-        <HeaderBar
-          task={result?.task ?? null}
-          busy={isBusy}
-          onLoadSample={() => void loadSample()}
-          onUpload={(file) => void uploadAndAnalyze(file)}
-          onReanalyze={() => void reanalyze()}
-          onExport={exportResult}
-        />
+        <div className="space-y-3">
+          <HeaderBar
+            task={result?.task ?? null}
+            busy={isBusy}
+            onLoadSample={() => void loadSample()}
+            onUpload={(file) => void uploadAndAnalyze(file)}
+            onReanalyze={() => void reanalyze()}
+            onExport={exportResult}
+          />
+          {error ? <ErrorBanner message={error} /> : null}
+        </div>
       }
       left={leftPanel}
       right={rightPanel}

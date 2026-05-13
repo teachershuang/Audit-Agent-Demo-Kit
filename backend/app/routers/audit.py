@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from app.logging_utils import app_logger, json_dumps
 from app.schemas.agent import AuditGenerateRequest, AuditGenerateResponse
 from app.storage.local_store import LocalStore
 
@@ -17,12 +18,31 @@ def get_audit_router(store: LocalStore, agent):
             raise HTTPException(status_code=404, detail="Task not found") from exc
         if not record.result:
             raise HTTPException(status_code=404, detail="Result not generated")
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "audit_regenerate_started",
+                    "taskId": payload.task_id,
+                    "relationCount": len(payload.relations),
+                }
+            )
+        )
 
         artifacts = await agent.analyze(
             task=record.task,
             relations=payload.relations,
             use_builtin_example=record.use_builtin_example,
             file_path=record.file_path,
+        )
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "audit_regenerate_completed",
+                    "taskId": payload.task_id,
+                    "auditFocuses": len(artifacts.audit_focuses),
+                    "verificationItems": len(artifacts.verification_items),
+                }
+            )
         )
         store.set_relations(payload.relations)
         store.save_result(

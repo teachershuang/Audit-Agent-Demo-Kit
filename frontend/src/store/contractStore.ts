@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { AgentStep, AuditFocus, VerificationItem } from "../types/audit";
 import type { AnalysisTab, ContractAnalysisResult, EvidenceRef } from "../types/contract";
 import type { RelationConfig } from "../types/relation";
-import { api } from "../services/api";
+import { api, postFrontendLog } from "../services/api";
 
 type ActiveEntity =
   | { kind: "section"; id: string }
@@ -65,12 +65,16 @@ export const useContractStore = create<ContractState>((set, get) => ({
     try {
       const relations = await api.getRelations();
       set({ relations, error: null });
+      await postFrontendLog("boot_completed", undefined, { relationCount: relations.length });
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : "服务连接失败" });
+      const message = error instanceof Error ? error.message : "服务连接失败";
+      await postFrontendLog("boot_failed", message, {}, "error");
+      set({ error: message });
     }
   },
 
   async loadSample() {
+    await postFrontendLog("load_sample_clicked");
     await get().uploadAndAnalyze();
   },
 
@@ -87,16 +91,30 @@ export const useContractStore = create<ContractState>((set, get) => ({
       set({
         result,
         relations,
-        auditFocuses: analyzePayload.auditFocuses,
-        verificationItems: analyzePayload.verificationItems,
-        agentSteps: analyzePayload.agentSteps,
+        auditFocuses: analyzePayload.auditFocuses ?? [],
+        verificationItems: analyzePayload.verificationItems ?? [],
+        agentSteps: analyzePayload.agentSteps ?? [],
         activeTab: "sections",
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId,
         activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
       });
+
+      await postFrontendLog("upload_and_analyze_completed", undefined, {
+        taskId,
+        sections: result.sections.length,
+        clauses: result.clauses.length,
+        pages: result.pages.length,
+      });
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : "加载失败" });
+      const message = error instanceof Error ? error.message : "加载失败";
+      await postFrontendLog(
+        "upload_and_analyze_failed",
+        message,
+        { fileName: file?.name ?? null, size: file?.size ?? null },
+        "error",
+      );
+      set({ error: message });
     } finally {
       set({ isBusy: false });
     }
@@ -105,6 +123,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
   async reanalyze() {
     const current = get().result;
     if (!current) return;
+
     try {
       set({ isBusy: true, error: null });
       const analyzePayload = await api.analyzeContract(current.task.taskId);
@@ -113,15 +132,18 @@ export const useContractStore = create<ContractState>((set, get) => ({
       set({
         result,
         relations,
-        auditFocuses: analyzePayload.auditFocuses,
-        verificationItems: analyzePayload.verificationItems,
-        agentSteps: analyzePayload.agentSteps,
+        auditFocuses: analyzePayload.auditFocuses ?? [],
+        verificationItems: analyzePayload.verificationItems ?? [],
+        agentSteps: analyzePayload.agentSteps ?? [],
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId: result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null,
         activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
       });
+      await postFrontendLog("reanalyze_completed", undefined, { taskId: current.task.taskId });
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : "重新解析失败" });
+      const message = error instanceof Error ? error.message : "重新解析失败";
+      await postFrontendLog("reanalyze_failed", message, { taskId: current.task.taskId }, "error");
+      set({ error: message });
     } finally {
       set({ isBusy: false });
     }
@@ -146,6 +168,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
     anchor.download = `${result.task.taskId}-analysis.json`;
     anchor.click();
     URL.revokeObjectURL(url);
+    void postFrontendLog("export_result_clicked", undefined, { taskId: result.task.taskId });
   },
 
   setActiveTab(tab) {
@@ -205,14 +228,19 @@ export const useContractStore = create<ContractState>((set, get) => ({
     const result = get().result;
     if (!result) return;
 
-    set({ isBusy: true });
+    set({ isBusy: true, error: null });
     try {
       const payload = await api.generateAudit(result.task.taskId, get().relations);
       set({
-        auditFocuses: payload.auditFocuses,
-        verificationItems: payload.verificationItems,
-        agentSteps: payload.agentSteps,
+        auditFocuses: payload.auditFocuses ?? [],
+        verificationItems: payload.verificationItems ?? [],
+        agentSteps: payload.agentSteps ?? [],
       });
+      await postFrontendLog("regenerate_audit_completed", undefined, { taskId: result.task.taskId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "重新生成关注事项失败";
+      await postFrontendLog("regenerate_audit_failed", message, { taskId: result.task.taskId }, "error");
+      set({ error: message });
     } finally {
       set({ isBusy: false });
     }

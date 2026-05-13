@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { Minus, Plus, SearchCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getApiBaseUrlSync } from "../../services/api";
 import { cn } from "../../lib/cn";
 import type { ContractPage, EvidenceRef } from "../../types/contract";
 import { EvidenceHighlight } from "./EvidenceHighlight";
@@ -39,7 +40,8 @@ export function ContractViewer({
         .find((evidence) => evidence.id === selectedEvidenceId) ?? null,
     [pages, selectedEvidenceId],
   );
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+
+  const apiBaseUrl = getApiBaseUrlSync();
 
   return (
     <div className="glass-panel flex h-full min-h-[720px] flex-col rounded-[28px] border border-white/8 p-4">
@@ -50,7 +52,7 @@ export function ContractViewer({
           </p>
           <h2 className="mt-1 font-display text-xl text-white">合同原件区</h2>
           <p className="mt-2 text-sm text-slate-300">
-            点击右侧章节、条款或关注方向后，左侧自动跳转页码并高亮证据区域。
+            点击右侧章节、条款或关注事项后，左侧自动跳转页码并高亮证据区域。
           </p>
         </div>
 
@@ -78,7 +80,10 @@ export function ContractViewer({
           <PageThumbnailList pages={pages} activePage={activePage} onSelect={onSelectPage} />
         </div>
 
-        <div ref={containerRef} className="thin-scrollbar min-h-0 overflow-y-auto rounded-[24px] border border-white/8 bg-slate-950/30 p-4">
+        <div
+          ref={containerRef}
+          className="thin-scrollbar min-h-0 overflow-y-auto rounded-[24px] border border-white/8 bg-slate-950/30 p-4"
+        >
           <div className="mx-auto flex max-w-[980px] flex-col gap-6">
             {pages.map((page) => {
               const scale = zoom;
