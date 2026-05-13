@@ -1,1 +1,1 @@
-"""Contract audit agent demo backend."""
+"""Contract audit agent backend."""

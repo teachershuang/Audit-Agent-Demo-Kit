@@ -39,6 +39,7 @@ export function ContractViewer({
         .find((evidence) => evidence.id === selectedEvidenceId) ?? null,
     [pages, selectedEvidenceId],
   );
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
   return (
     <div className="glass-panel flex h-full min-h-[720px] flex-col rounded-[28px] border border-white/8 p-4">
@@ -116,22 +117,32 @@ export function ContractViewer({
                     className="document-page relative mx-auto rounded-[20px] border border-slate-300/70"
                     style={{ width: page.width * scale, height: page.height * scale }}
                   >
-                    {page.blocks.map((block) => (
-                      <div
-                        key={block.id}
-                        className={cn(
-                          "absolute leading-7",
-                          block.emphasis ? "font-semibold text-slate-800" : "text-[15px] text-slate-700",
-                        )}
-                        style={{
-                          left: block.x * scale,
-                          top: block.y * scale,
-                          width: block.width * scale,
-                        }}
-                      >
-                        {block.text}
-                      </div>
-                    ))}
+                    {page.imageUrl ? (
+                      <img
+                        src={page.imageUrl.startsWith("http") ? page.imageUrl : `${apiBaseUrl}${page.imageUrl}`}
+                        alt={`合同第 ${page.page} 页`}
+                        className="absolute inset-0 h-full w-full rounded-[20px] object-contain"
+                      />
+                    ) : null}
+
+                    {!page.imageUrl
+                      ? page.blocks.map((block) => (
+                          <div
+                            key={block.id}
+                            className={cn(
+                              "absolute leading-7",
+                              block.emphasis ? "font-semibold text-slate-800" : "text-[15px] text-slate-700",
+                            )}
+                            style={{
+                              left: block.x * scale,
+                              top: block.y * scale,
+                              width: block.width * scale,
+                            }}
+                          >
+                            {block.text}
+                          </div>
+                        ))
+                      : null}
 
                     {page.evidences.map((evidence) => (
                       <EvidenceHighlight

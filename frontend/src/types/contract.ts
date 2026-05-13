@@ -47,6 +47,7 @@ export interface DocumentBlock {
   x: number;
   y: number;
   width: number;
+  height?: number;
   emphasis?: boolean;
 }
 
@@ -55,8 +56,19 @@ export interface ContractPage {
   title: string;
   width: number;
   height: number;
+  imageUrl?: string | null;
   blocks: DocumentBlock[];
   evidences: EvidenceRef[];
+}
+
+export interface KeyFact {
+  id: string;
+  label: string;
+  value: string;
+  page: number;
+  confidence: number;
+  evidenceId?: string | null;
+  notes?: string | null;
 }
 
 export interface ConfidenceOverview {
@@ -81,4 +93,5 @@ export interface ContractAnalysisResult {
   pages: ContractPage[];
   sections: ContractSection[];
   clauses: ClauseTag[];
+  keyFacts: KeyFact[];
 }

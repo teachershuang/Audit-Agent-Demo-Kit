@@ -19,11 +19,9 @@ def get_audit_router(store: LocalStore, agent):
             raise HTTPException(status_code=404, detail="Result not generated")
 
         artifacts = await agent.analyze(
-            task_id=record.task.taskId,
-            file_name=record.task.fileName,
-            model_name=record.task.modelName,
+            task=record.task,
             relations=payload.relations,
-            use_sample=record.use_sample,
+            use_builtin_example=record.use_builtin_example,
             file_path=record.file_path,
         )
         store.set_relations(payload.relations)

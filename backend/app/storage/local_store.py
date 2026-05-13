@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from app.mock.sample_result import build_mock_relations
+from app.data.default_relations import build_default_relations
 from app.schemas.agent import AgentStep
 from app.schemas.audit import AuditFocus, VerificationItem
 from app.schemas.contract import ContractAnalysisResult, ContractTask, TaskStatus
@@ -17,7 +17,7 @@ from app.schemas.relation import RelationConfig
 class TaskRecord:
     task: ContractTask
     file_path: Optional[Path] = None
-    use_sample: bool = True
+    use_builtin_example: bool = True
     result: ContractAnalysisResult | None = None
     audit_focuses: list[AuditFocus] = field(default_factory=list)
     verification_items: list[VerificationItem] = field(default_factory=list)
@@ -29,9 +29,15 @@ class LocalStore:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: dict[str, TaskRecord] = {}
-        self._relations: list[RelationConfig] = build_mock_relations()
+        self._relations: list[RelationConfig] = build_default_relations()
 
-    def create_task(self, file_name: str, model_name: str, use_sample: bool, file_path: Path | None = None) -> TaskRecord:
+    def create_task(
+        self,
+        file_name: str,
+        model_name: str,
+        use_builtin_example: bool,
+        file_path: Path | None = None,
+    ) -> TaskRecord:
         task_id = f"task_{uuid4().hex[:8]}"
         task = ContractTask(
             taskId=task_id,
@@ -41,7 +47,11 @@ class LocalStore:
             modelName=model_name,
             confidenceOverview={"overall": 0.0, "sections": 0.0, "clauses": 0.0, "audit": 0.0, "warnings": 0},
         )
-        record = TaskRecord(task=task, file_path=file_path, use_sample=use_sample)
+        record = TaskRecord(
+            task=task,
+            file_path=file_path,
+            use_builtin_example=use_builtin_example,
+        )
         self._tasks[task_id] = record
         return record
 

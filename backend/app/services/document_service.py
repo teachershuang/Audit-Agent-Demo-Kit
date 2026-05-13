@@ -11,10 +11,16 @@ class DocumentPreparation:
     is_scanned: bool
     recommended_pipeline: str
     source_path: Path | None = None
+    use_builtin_example: bool = False
 
 
 class DocumentService:
-    def prepare(self, file_name: str, file_path: Path | None, use_sample: bool) -> DocumentPreparation:
+    def prepare(
+        self,
+        file_name: str,
+        file_path: Path | None,
+        use_builtin_example: bool,
+    ) -> DocumentPreparation:
         suffix = Path(file_name).suffix.lower()
         if suffix == ".pdf":
             file_type = "pdf"
@@ -24,20 +30,20 @@ class DocumentService:
             file_type = "unknown"
 
         is_scanned = file_type == "image"
-        if file_type == "pdf":
-            recommended_pipeline = "text-extract-first"
+        if use_builtin_example:
+            pipeline = "builtin-example"
+        elif file_type == "pdf":
+            pipeline = "pdf"
         elif file_type == "image":
-            recommended_pipeline = "ocr-first"
+            pipeline = "image"
         else:
-            recommended_pipeline = "mock-fallback"
-
-        if use_sample:
-            recommended_pipeline = "mock-sample"
+            pipeline = "unsupported"
 
         return DocumentPreparation(
             file_name=file_name,
             file_type=file_type,
             is_scanned=is_scanned,
-            recommended_pipeline=recommended_pipeline,
+            recommended_pipeline=pipeline,
             source_path=file_path,
+            use_builtin_example=use_builtin_example,
         )

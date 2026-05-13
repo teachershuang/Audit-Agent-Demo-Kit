@@ -28,6 +28,7 @@ class DocumentBlock(BaseModel):
     x: int
     y: int
     width: int
+    height: int = 24
     emphasis: bool = False
 
 
@@ -36,6 +37,7 @@ class ContractPage(BaseModel):
     title: str
     width: int
     height: int
+    imageUrl: str | None = None
     blocks: list[DocumentBlock] = Field(default_factory=list)
     evidences: list[EvidenceRef] = Field(default_factory=list)
 
@@ -63,6 +65,16 @@ class ClauseTag(BaseModel):
     relatedAuditFocusIds: list[str] = Field(default_factory=list)
 
 
+class KeyFact(BaseModel):
+    id: str
+    label: str
+    value: str
+    page: int
+    confidence: float
+    evidenceId: str | None = None
+    notes: str | None = None
+
+
 class ConfidenceOverview(BaseModel):
     overall: float
     sections: float
@@ -85,6 +97,7 @@ class ContractAnalysisResult(BaseModel):
     pages: list[ContractPage] = Field(default_factory=list)
     sections: list[ContractSection] = Field(default_factory=list)
     clauses: list[ClauseTag] = Field(default_factory=list)
+    keyFacts: list[KeyFact] = Field(default_factory=list)
 
 
 class UploadResponse(BaseModel):

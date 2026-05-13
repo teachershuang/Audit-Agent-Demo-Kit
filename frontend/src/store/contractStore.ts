@@ -62,8 +62,12 @@ export const useContractStore = create<ContractState>((set, get) => ({
   error: null,
 
   async boot() {
-    const relations = await api.getRelations();
-    set({ relations });
+    try {
+      const relations = await api.getRelations();
+      set({ relations, error: null });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "服务连接失败" });
+    }
   },
 
   async loadSample() {
@@ -74,7 +78,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
     try {
       set({ isBusy: true, error: null });
       const taskId = await api.uploadContract(file);
-      await api.analyzeContract(taskId);
+      const analyzePayload = await api.analyzeContract(taskId);
       const result = await api.getContractResult(taskId);
       const relations = await api.getRelations();
       const selectedEvidenceId =
@@ -83,16 +87,14 @@ export const useContractStore = create<ContractState>((set, get) => ({
       set({
         result,
         relations,
-        auditFocuses: [],
-        verificationItems: [],
-        agentSteps: [],
+        auditFocuses: analyzePayload.auditFocuses,
+        verificationItems: analyzePayload.verificationItems,
+        agentSteps: analyzePayload.agentSteps,
         activeTab: "sections",
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId,
         activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
       });
-
-      await get().regenerateAudit();
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "加载失败" });
     } finally {
@@ -103,8 +105,26 @@ export const useContractStore = create<ContractState>((set, get) => ({
   async reanalyze() {
     const current = get().result;
     if (!current) return;
-
-    await get().uploadAndAnalyze(new File(["mock"], current.task.fileName, { type: "application/pdf" }));
+    try {
+      set({ isBusy: true, error: null });
+      const analyzePayload = await api.analyzeContract(current.task.taskId);
+      const result = await api.getContractResult(current.task.taskId);
+      const relations = await api.getRelations();
+      set({
+        result,
+        relations,
+        auditFocuses: analyzePayload.auditFocuses,
+        verificationItems: analyzePayload.verificationItems,
+        agentSteps: analyzePayload.agentSteps,
+        activePage: result.pages[0]?.page ?? 1,
+        selectedEvidenceId: result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null,
+        activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
+      });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "重新解析失败" });
+    } finally {
+      set({ isBusy: false });
+    }
   },
 
   exportResult() {

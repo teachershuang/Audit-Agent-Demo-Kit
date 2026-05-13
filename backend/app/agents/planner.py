@@ -6,7 +6,7 @@ from app.services.document_service import DocumentPreparation
 class Planner:
     def build_plan(self, document: DocumentPreparation) -> list[str]:
         plan = ["receive-file", "detect-file-type", "document-preprocess"]
-        if document.recommended_pipeline in {"ocr-first", "mock-sample"}:
+        if document.recommended_pipeline in {"ocr-first", "image"}:
             plan.append("ocr")
         else:
             plan.append("text-extract")

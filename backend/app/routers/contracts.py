@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
 from app.schemas.contract import ContractAnalysisResult, UploadResponse
@@ -15,24 +16,21 @@ def get_contract_router(store: LocalStore, agent):
     @router.post("/upload", response_model=UploadResponse)
     async def upload_contract(
         file: UploadFile | None = File(default=None),
-        use_sample: bool = Form(default=False),
+        use_builtin_example: bool = Form(default=False),
         settings: Settings = Depends(get_settings),
     ) -> UploadResponse:
-        file_name = file.filename if file else "sample_contract.pdf"
-        upload_dir = Path(__file__).resolve().parents[2] / settings.storage_dir
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        file_path = None
-        if file:
-            task_file_name = f"{file_name}"
-            file_path = upload_dir / task_file_name
-            file_path.write_bytes(await file.read())
-
         record = store.create_task(
-            file_name=file_name,
-            model_name="Qwen / Mock Hybrid" if settings.use_mock_model or not settings.qwen_api_key else settings.qwen_model_name,
-            use_sample=use_sample or file is None,
-            file_path=file_path,
+            file_name=file.filename if file else "example_contract.pdf",
+            model_name=settings.qwen_model_name,
+            use_builtin_example=use_builtin_example or file is None,
+            file_path=None,
         )
+        task_dir = Path(__file__).resolve().parents[2] / settings.storage_dir / record.task.taskId
+        task_dir.mkdir(parents=True, exist_ok=True)
+        if file:
+            file_path = task_dir / (file.filename or "contract.pdf")
+            file_path.write_bytes(await file.read())
+            record.file_path = file_path
         return UploadResponse(task_id=record.task.taskId)
 
     @router.get("/{task_id}")
@@ -50,11 +48,9 @@ def get_contract_router(store: LocalStore, agent):
             raise HTTPException(status_code=404, detail="Task not found") from exc
 
         artifacts = await agent.analyze(
-            task_id=record.task.taskId,
-            file_name=record.task.fileName,
-            model_name=record.task.modelName,
+            task=record.task,
             relations=store.list_relations(),
-            use_sample=record.use_sample,
+            use_builtin_example=record.use_builtin_example,
             file_path=record.file_path,
         )
         store.save_result(
@@ -64,7 +60,13 @@ def get_contract_router(store: LocalStore, agent):
             verification_items=artifacts.verification_items,
             agent_steps=artifacts.agent_steps,
         )
-        return {"task_id": task_id, "status": artifacts.result.task.status}
+        return {
+            "task_id": task_id,
+            "status": artifacts.result.task.status,
+            "auditFocuses": [item.model_dump() for item in artifacts.audit_focuses],
+            "verificationItems": [item.model_dump() for item in artifacts.verification_items],
+            "agentSteps": [item.model_dump() for item in artifacts.agent_steps],
+        }
 
     @router.get("/{task_id}/result", response_model=ContractAnalysisResult)
     async def get_contract_result(task_id: str) -> ContractAnalysisResult:
@@ -88,6 +90,17 @@ def get_contract_router(store: LocalStore, agent):
             if item.page == page:
                 return item
         raise HTTPException(status_code=404, detail="Page not found")
+
+    @router.get("/{task_id}/pages/{page}/image")
+    async def get_contract_page_image(
+        task_id: str,
+        page: int,
+        settings: Settings = Depends(get_settings),
+    ):
+        image_path = Path(__file__).resolve().parents[2] / settings.storage_dir / task_id / "pages" / f"page_{page:03d}.png"
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+        return FileResponse(image_path)
 
     @router.get("/{task_id}/evidence/{evidence_id}")
     async def get_contract_evidence(task_id: str, evidence_id: str):

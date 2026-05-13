@@ -10,7 +10,7 @@ ROOT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    app_name: str = "Contract Audit Agent Demo"
+    app_name: str = "合同智能解析与审计关注点 Agent"
     app_env: str = "development"
     cors_allow_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"
-    use_mock_model: bool = True
+    qwen_vision_model_name: str = "qwen-vl-plus"
 
     storage_dir: str = "uploads"
 
