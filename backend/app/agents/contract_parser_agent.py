@@ -64,6 +64,10 @@ class ContractParserAgent:
         return hints
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
+        derived_sections = self._derive_sections_locally(pages)
+        if self._derived_sections_are_sufficient(derived_sections, pages):
+            return derived_sections
+
         if len(pages) <= max(self.section_batch_size * 3, 12):
             raw_sections = await self._request_sections(pages)
         else:
@@ -104,7 +108,7 @@ class ContractParserAgent:
                     evidenceId=None,
                 )
             )
-        return sections
+        return sections or derived_sections
 
     async def identify_clauses(
         self,
@@ -561,6 +565,126 @@ class ContractParserAgent:
             unique[(fact.label, fact.value, fact.page)] = fact
         return list(unique.values())
 
+    def _derive_sections_locally(self, pages: list[ContractPage]) -> list[ContractSection]:
+        derived: list[ContractSection] = []
+        seen: set[tuple[int, str]] = set()
+        for page in pages:
+            for block in page.blocks[:24]:
+                candidates = self._extract_heading_candidates(block.text)
+                for title in candidates:
+                    key = (page.page, title)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    derived.append(
+                        ContractSection(
+                            id=f"section_{len(derived) + 1:03d}",
+                            title=title,
+                            level=self._infer_heading_level(title),
+                            page=page.page,
+                            summary=self._build_section_summary(block.text, title),
+                            confidence=0.74 if len(title) <= 28 else 0.68,
+                            evidenceId=None,
+                        )
+                    )
+                    if len(derived) >= 24:
+                        return derived
+        return derived
+
+    @staticmethod
+    def _extract_heading_candidates(text: str) -> list[str]:
+        source = ContractParserAgent._clean(text)
+        if not source:
+            return []
+
+        candidates: list[str] = []
+        if len(source) <= 36 and ContractParserAgent._is_heading_candidate(source):
+            candidates.append(ContractParserAgent._normalize_heading_candidate(source))
+
+        patterns = [
+            re.compile(r"(第[一二三四五六七八九十百零〇0-9]+[章节条][：:]?[^\n。；;]{0,32})"),
+            re.compile(r"([一二三四五六七八九十]+、[^\n。；;]{0,28})"),
+            re.compile(r"([0-9]+[.、][^\n。；;]{0,28})"),
+            re.compile(r"([（(][0-9一二三四五六七八九十]+[)）][^\n。；;]{0,24})"),
+        ]
+        for pattern in patterns:
+            for match in pattern.finditer(source):
+                candidate = ContractParserAgent._normalize_heading_candidate(match.group(1))
+                if ContractParserAgent._is_heading_candidate(candidate):
+                    candidates.append(candidate)
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            unique.append(candidate)
+        return unique
+
+    @staticmethod
+    def _normalize_heading_candidate(text: str) -> str:
+        cleaned = ContractParserAgent._clean(text).strip("：:，,；;。. ")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        if "扫描全能王" in cleaned:
+            return ""
+        return cleaned[:40]
+
+    @staticmethod
+    def _is_heading_candidate(text: str) -> bool:
+        compact = ContractParserAgent._clean(text)
+        if not compact or len(compact) < 3 or len(compact) > 40:
+            return False
+        if any(marker in compact for marker in ("扫描全能王", "填写说明", "合同登记机构", "经办人")):
+            return False
+        if re.fullmatch(r"[0-9A-Za-z\-_/：: ]+", compact):
+            return False
+        if re.match(r"^[0-9]+[.、]", compact):
+            remainder = re.sub(r"^[0-9]+[.、]", "", compact, count=1)
+            if not re.search(r"[\u4e00-\u9fff]{2,}", remainder):
+                return False
+            if re.match(r"^[0-9A-Za-z]", remainder):
+                return False
+        if re.match(r"^[（(][0-9一二三四五六七八九十]+[)）]", compact):
+            remainder = re.sub(r"^[（(][0-9一二三四五六七八九十]+[)）]", "", compact, count=1)
+            if not re.search(r"[\u4e00-\u9fff]{2,}", remainder):
+                return False
+        if sum(char.isdigit() for char in compact) >= max(4, len(compact) // 3) and not any(
+            keyword in compact for keyword in ("合同", "服务", "付款", "验收", "责任", "保密", "争议", "期限", "内容")
+        ):
+            return False
+        heading_patterns = (
+            r"^第[一二三四五六七八九十百零〇0-9]+[章节条]",
+            r"^[一二三四五六七八九十]+、",
+            r"^[0-9]+[.、]",
+            r"^[（(][0-9一二三四五六七八九十]+[)）]",
+        )
+        return any(re.match(pattern, compact) for pattern in heading_patterns) or ContractParserAgent._is_likely_heading(compact)
+
+    @staticmethod
+    def _infer_heading_level(text: str) -> int:
+        compact = ContractParserAgent._clean(text)
+        if re.match(r"^第[一二三四五六七八九十百零〇0-9]+章", compact):
+            return 1
+        if re.match(r"^第[一二三四五六七八九十百零〇0-9]+条", compact):
+            return 1
+        if re.match(r"^[一二三四五六七八九十]+、", compact):
+            return 1
+        if re.match(r"^[0-9]+[.、]", compact):
+            return 2
+        if re.match(r"^[（(][0-9一二三四五六七八九十]+[)）]", compact):
+            return 3
+        return 1
+
+    @staticmethod
+    def _build_section_summary(block_text: str, title: str) -> str:
+        source = ContractParserAgent._clean(block_text)
+        if not source:
+            return title
+        if source.startswith(title):
+            source = source[len(title) :].strip("：:，,；;。 ")
+        return source[:120] or title
+
     @staticmethod
     def _stringify_clause_value(value: Any) -> str:
         if value is None:
@@ -652,6 +776,16 @@ class ContractParserAgent:
         for index, fact in enumerate(deduped, start=1):
             fact.id = f"fact_{index:03d}"
         return deduped
+
+    @staticmethod
+    def _derived_sections_are_sufficient(sections: list[ContractSection], pages: list[ContractPage]) -> bool:
+        if len(sections) < 6:
+            return False
+        covered_pages = {item.page for item in sections}
+        if len(covered_pages) < min(3, len(pages)):
+            return False
+        top_level_count = sum(1 for item in sections if item.level <= 2)
+        return top_level_count >= 5
 
     @staticmethod
     def _derived_facts_are_sufficient(facts: list[KeyFact]) -> bool:
