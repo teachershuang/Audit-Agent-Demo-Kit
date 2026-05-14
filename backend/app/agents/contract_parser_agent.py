@@ -148,6 +148,10 @@ class ContractParserAgent:
         pages: list[ContractPage],
         clauses: list[ClauseTag],
     ) -> list[KeyFact]:
+        derived_facts = self._derive_key_facts_from_clauses(clauses)
+        if self._derived_facts_are_sufficient(derived_facts):
+            return self._dedupe_key_facts(derived_facts)
+
         clause_batches = self._chunk_items(clauses, self.key_fact_batch_size)
         raw_batches = await self._gather_limited(
             [self._request_key_facts(batch) for batch in clause_batches],
@@ -176,8 +180,9 @@ class ContractParserAgent:
             )
 
         if facts:
-            return self._dedupe_key_facts(facts)
-        return self._derive_key_facts_from_clauses(clauses)
+            merged_facts = self._dedupe_key_facts(derived_facts + facts)
+            return merged_facts
+        return self._dedupe_key_facts(derived_facts)
 
     async def _request_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
         payload = await self.qwen_service.chat_json(
@@ -486,13 +491,18 @@ class ContractParserAgent:
                 )
             )
 
-        party_pattern = re.compile(r"(\u7532\u65b9|\u4e59\u65b9)[:\uff1a]\s*([^\n\uff0c\u3002,\uff1b;]{2,40})")
+        party_pattern = re.compile(r"(\u7532\u65b9|\u4e59\u65b9)(?:\u540d\u79f0)?[:\uff1a]\s*([^\n\uff0c\u3002,\uff1b;]{2,60})")
+        party_alt_patterns = {
+            "\u7532\u65b9": re.compile(r"\u7532\u65b9(?:\u4e3a|\u662f)?([^\n\uff0c\u3002,\uff1b;]{2,60})"),
+            "\u4e59\u65b9": re.compile(r"\u4e59\u65b9(?:\u4e3a|\u662f)?([^\n\uff0c\u3002,\uff1b;]{2,60})"),
+        }
         amount_pattern = re.compile(
             r"(?:\u4eba\u6c11\u5e01|\u5408\u540c\u603b\u989d|\u603b\u91d1\u989d|\u91d1\u989d)[^0-9]{0,8}([0-9][0-9,\uff0c.]*(?:\u5143|\u4e07\u5143)?)"
         )
 
         for clause in clauses:
             if clause.label == "\u7532\u4e59\u65b9\u4fe1\u606f":
+                matched_party_labels: set[str] = set()
                 for match in party_pattern.finditer(clause.rawText):
                     add_fact(
                         label=match.group(1),
@@ -501,6 +511,20 @@ class ContractParserAgent:
                         confidence=clause.confidence,
                         evidence_id=clause.evidenceId,
                     )
+                    matched_party_labels.add(match.group(1))
+                for label, pattern in party_alt_patterns.items():
+                    if label in matched_party_labels:
+                        continue
+                    alt_match = pattern.search(clause.rawText)
+                    if alt_match:
+                        add_fact(
+                            label=label,
+                            value=alt_match.group(1),
+                            page=clause.page,
+                            confidence=clause.confidence,
+                            evidence_id=clause.evidenceId,
+                        )
+                add_fact("\u7532\u4e59\u65b9\u4fe1\u606f", clause.summary or clause.rawText[:120], clause.page, clause.confidence, clause.evidenceId)
             elif clause.label == "\u5408\u540c\u91d1\u989d":
                 match = amount_pattern.search(clause.rawText)
                 if match:
@@ -519,6 +543,18 @@ class ContractParserAgent:
                 add_fact("\u4e89\u8bae\u89e3\u51b3", clause.summary or clause.rawText[:80], clause.page, clause.confidence, clause.evidenceId)
             elif clause.label == "\u8d26\u6237\u4fe1\u606f":
                 add_fact("\u8d26\u6237\u4fe1\u606f", clause.summary or clause.rawText[:80], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u5c65\u7ea6\u671f\u9650":
+                add_fact("\u5c65\u7ea6\u671f\u9650", clause.summary or clause.rawText[:80], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u670d\u52a1/\u91c7\u8d2d/\u5de5\u7a0b\u5185\u5bb9":
+                add_fact("\u670d\u52a1/\u91c7\u8d2d/\u5de5\u7a0b\u5185\u5bb9", clause.summary or clause.rawText[:120], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u6743\u5229\u4e49\u52a1":
+                add_fact("\u6743\u5229\u4e49\u52a1", clause.summary or clause.rawText[:120], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u8fdd\u7ea6\u8d23\u4efb":
+                add_fact("\u8fdd\u7ea6\u8d23\u4efb", clause.summary or clause.rawText[:120], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u9644\u4ef6\u6761\u6b3e":
+                add_fact("\u9644\u4ef6\u6761\u6b3e", clause.summary or clause.rawText[:80], clause.page, clause.confidence, clause.evidenceId)
+            elif clause.label == "\u5176\u4ed6\u91cd\u8981\u6761\u6b3e":
+                add_fact("\u5408\u540c\u4efd\u6570\u53ca\u6cd5\u5f8b\u6548\u529b", clause.summary or clause.rawText[:120], clause.page, clause.confidence, clause.evidenceId)
 
         unique: dict[tuple[str, str, int], KeyFact] = {}
         for fact in facts:
@@ -616,6 +652,21 @@ class ContractParserAgent:
         for index, fact in enumerate(deduped, start=1):
             fact.id = f"fact_{index:03d}"
         return deduped
+
+    @staticmethod
+    def _derived_facts_are_sufficient(facts: list[KeyFact]) -> bool:
+        labels = {item.label for item in facts}
+        coverage = {
+            "\u7532\u65b9",
+            "\u4e59\u65b9",
+            "\u5408\u540c\u91d1\u989d",
+            "\u4ed8\u6b3e\u6761\u4ef6",
+            "\u9a8c\u6536\u6807\u51c6",
+            "\u4e89\u8bae\u89e3\u51b3",
+            "\u7532\u4e59\u65b9\u4fe1\u606f",
+            "\u8d26\u6237\u4fe1\u606f",
+        }
+        return len(facts) >= 8 and len(labels & coverage) >= 5
 
     @staticmethod
     def _is_likely_heading(text: str) -> bool:
