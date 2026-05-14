@@ -116,4 +116,6 @@ class PaddleOCRService:
         return results
 
     def _chunk_pages(self, pages: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+        if len(pages) <= max(12, self.batch_size * 2):
+            return [pages]
         return [pages[index : index + self.batch_size] for index in range(0, len(pages), self.batch_size)]
