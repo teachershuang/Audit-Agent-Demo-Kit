@@ -115,6 +115,10 @@ class ContractParserAgent:
         pages: list[ContractPage],
         sections: list[ContractSection],
     ) -> list[ClauseTag]:
+        derived_clauses = self._derive_clauses_locally(pages, sections)
+        if self._derived_clauses_are_sufficient(derived_clauses):
+            return self._dedupe_clauses(derived_clauses)
+
         page_batches = self._page_batches(pages=pages, batch_size=self.clause_batch_size, overlap=0)
         tasks = [self._request_clauses(batch, sections) for batch in page_batches]
         raw_batches = await self._gather_limited(tasks, limit=min(self.parallelism, len(tasks)))
@@ -145,7 +149,7 @@ class ContractParserAgent:
                     relatedAuditFocusIds=[],
                 )
             )
-        return self._dedupe_clauses(clauses)
+        return self._dedupe_clauses(derived_clauses + clauses)
 
     async def extract_key_facts(
         self,
@@ -591,6 +595,141 @@ class ContractParserAgent:
                         return derived
         return derived
 
+    def _derive_clauses_locally(
+        self,
+        pages: list[ContractPage],
+        sections: list[ContractSection],
+    ) -> list[ClauseTag]:
+        clauses: list[ClauseTag] = []
+        section_text = "\n".join(f"{item.page}:{item.title}:{item.summary}" for item in sections[:40])
+        specs = [
+            {
+                "label": "合同基本信息",
+                "title": "合同基本信息",
+                "keywords": ["合同编号", "项目名称", "签订时间", "签订地点", "有效期限"],
+                "window": 4,
+                "confidence": 0.84,
+            },
+            {
+                "label": "甲乙方信息",
+                "title": "甲乙方信息",
+                "keywords": ["甲方", "乙方", "委托方", "受托方", "法定代表人"],
+                "window": 6,
+                "confidence": 0.86,
+            },
+            {
+                "label": "合同金额",
+                "title": "合同金额",
+                "keywords": ["技术服务费总额", "总金额", "万元"],
+                "window": 3,
+                "confidence": 0.86,
+            },
+            {
+                "label": "付款条件",
+                "title": "付款条件",
+                "keywords": ["支付方式", "分期", "支付给乙方", "余款", "支付"],
+                "window": 4,
+                "confidence": 0.84,
+            },
+            {
+                "label": "履约期限",
+                "title": "履约期限",
+                "keywords": ["技术服务期限", "服务进度", "质量期限", "完成技术服务工作"],
+                "window": 4,
+                "confidence": 0.82,
+            },
+            {
+                "label": "服务/采购/工程内容",
+                "title": "服务内容",
+                "keywords": ["第一条", "技术服务的内容", "技术服务的目标", "数据采集服务"],
+                "window": 6,
+                "confidence": 0.86,
+            },
+            {
+                "label": "验收标准",
+                "title": "验收标准",
+                "keywords": ["验收标准", "验收方法", "成果验收", "验收"],
+                "window": 4,
+                "confidence": 0.86,
+            },
+            {
+                "label": "违约责任",
+                "title": "违约责任",
+                "keywords": ["违约责任", "违约金", "赔偿损失", "第九条"],
+                "window": 5,
+                "confidence": 0.86,
+            },
+            {
+                "label": "权利义务",
+                "title": "权利义务",
+                "keywords": ["第三条", "工作条件", "协作事项", "提供技术资料"],
+                "window": 5,
+                "confidence": 0.8,
+            },
+            {
+                "label": "保密条款",
+                "title": "保密条款",
+                "keywords": ["保密义务", "保密期限", "泄密责任", "第五条"],
+                "window": 5,
+                "confidence": 0.82,
+            },
+            {
+                "label": "争议解决",
+                "title": "争议解决",
+                "keywords": ["争议", "仲裁", "人民法院", "第十二条"],
+                "window": 4,
+                "confidence": 0.86,
+            },
+            {
+                "label": "账户信息",
+                "title": "账户信息",
+                "keywords": ["开户银行", "帐号", "账号", "账户"],
+                "window": 4,
+                "confidence": 0.88,
+            },
+            {
+                "label": "附件条款",
+                "title": "附件条款",
+                "keywords": ["第十四条", "技术文件", "履行本合同有关", "组成部分"],
+                "window": 4,
+                "confidence": 0.82,
+            },
+            {
+                "label": "其他重要条款",
+                "title": "其他重要条款",
+                "keywords": ["合同变更", "不可抗力", "解除合同", "同等法律效力", "签字盖章后生效", "第十六条"],
+                "window": 5,
+                "confidence": 0.78,
+            },
+        ]
+        if section_text:
+            specs[5]["keywords"].append("第一条：甲方委托乙方进行技术服务的内容如下")
+            specs[8]["keywords"].append("第三条：为保证乙方有效进行技术服务工作")
+
+        for spec in specs:
+            match = self._find_clause_anchor(pages, spec["keywords"])
+            if not match:
+                continue
+            page, anchor_index = match
+            raw_text, evidence_id = self._build_clause_window(page, anchor_index, spec["window"])
+            if not raw_text:
+                continue
+            clauses.append(
+                ClauseTag(
+                    id=f"local_clause_{len(clauses) + 1:03d}",
+                    label=spec["label"],
+                    title=spec["title"],
+                    summary=self._summarize_clause_text(raw_text),
+                    rawText=raw_text,
+                    page=page.page,
+                    confidence=spec["confidence"],
+                    evidenceId=evidence_id or f"local_evidence_{len(clauses) + 1:03d}",
+                    needHumanReview=False,
+                    relatedAuditFocusIds=[],
+                )
+            )
+        return clauses
+
     @staticmethod
     def _extract_heading_candidates(text: str) -> list[str]:
         source = ContractParserAgent._clean(text)
@@ -629,6 +768,49 @@ class ContractParserAgent:
         if "扫描全能王" in cleaned:
             return ""
         return cleaned[:40]
+
+    @staticmethod
+    def _find_clause_anchor(
+        pages: list[ContractPage],
+        keywords: list[str],
+    ) -> tuple[ContractPage, int] | None:
+        best_match: tuple[int, ContractPage, int] | None = None
+        normalized_keywords = [ContractParserAgent._clean(keyword) for keyword in keywords if ContractParserAgent._clean(keyword)]
+        for page in pages:
+            for index, block in enumerate(page.blocks):
+                text = ContractParserAgent._clean(block.text)
+                if not text:
+                    continue
+                score = sum(1 for keyword in normalized_keywords if keyword in text)
+                if score <= 0:
+                    continue
+                weighted = score * 20 + len(text[:120]) // 40 - index
+                if best_match is None or weighted > best_match[0]:
+                    best_match = (weighted, page, index)
+        if best_match is None:
+            return None
+        return best_match[1], best_match[2]
+
+    @staticmethod
+    def _build_clause_window(page: ContractPage, anchor_index: int, window: int) -> tuple[str, str | None]:
+        blocks = page.blocks[anchor_index : anchor_index + max(1, window)]
+        texts = []
+        for block in blocks:
+            cleaned = ContractParserAgent._clean(block.text)
+            if not cleaned or "扫描全能王" in cleaned:
+                continue
+            texts.append(cleaned)
+        evidence_id = blocks[0].id if blocks else None
+        return "\n".join(texts)[:1200], evidence_id
+
+    @staticmethod
+    def _summarize_clause_text(raw_text: str) -> str:
+        cleaned = ContractParserAgent._clean(raw_text)
+        if not cleaned:
+            return ""
+        summary = cleaned.replace("\n", " ")
+        summary = re.sub(r"\s+", " ", summary)
+        return summary[:160]
 
     @staticmethod
     def _is_heading_candidate(text: str) -> bool:
@@ -786,6 +968,21 @@ class ContractParserAgent:
             return False
         top_level_count = sum(1 for item in sections if item.level <= 2)
         return top_level_count >= 5
+
+    @staticmethod
+    def _derived_clauses_are_sufficient(clauses: list[ClauseTag]) -> bool:
+        labels = {item.label for item in clauses}
+        critical = {
+            "甲乙方信息",
+            "合同金额",
+            "付款条件",
+            "服务/采购/工程内容",
+            "验收标准",
+            "违约责任",
+            "争议解决",
+            "账户信息",
+        }
+        return len(clauses) >= 10 and len(labels & critical) >= 7
 
     @staticmethod
     def _derived_facts_are_sufficient(facts: list[KeyFact]) -> bool:
