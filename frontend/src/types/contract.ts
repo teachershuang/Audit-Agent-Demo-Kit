@@ -86,6 +86,10 @@ export interface ContractTask {
   createdAt: string;
   modelName: string;
   confidenceOverview: ConfidenceOverview;
+  progressPercent: number;
+  currentStage?: string | null;
+  stageDetail?: string | null;
+  elapsedMs?: number;
 }
 
 export interface ContractAnalysisResult {

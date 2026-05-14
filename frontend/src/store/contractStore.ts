@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AgentStep, AuditFocus, VerificationItem } from "../types/audit";
-import type { AnalysisTab, ContractAnalysisResult, EvidenceRef } from "../types/contract";
+import type { AnalysisTab, ContractAnalysisResult, ContractTask, EvidenceRef } from "../types/contract";
 import type { RelationConfig } from "../types/relation";
 import { api, postFrontendLog } from "../services/api";
 
@@ -13,6 +13,7 @@ type ActiveEntity =
   | null;
 
 interface ContractState {
+  task: ContractTask | null;
   result: ContractAnalysisResult | null;
   relations: RelationConfig[];
   auditFocuses: AuditFocus[];
@@ -48,8 +49,13 @@ function deriveTabAndEntityFromEvidence(evidence: EvidenceRef): {
   return { tab: "clauses", entity: { kind: "clause", id: evidence.sourceId } };
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export const useContractStore = create<ContractState>((set, get) => ({
   result: null,
+  task: null,
   relations: [],
   auditFocuses: [],
   verificationItems: [],
@@ -79,16 +85,54 @@ export const useContractStore = create<ContractState>((set, get) => ({
   },
 
   async uploadAndAnalyze(file?: File) {
+    let taskId: string | null = null;
+
+    const pollTask = async () => {
+      if (!taskId) return;
+      while (true) {
+        try {
+          const task = await api.getContractTask(taskId);
+          set({ task });
+          if (task.status !== "processing") {
+            return task;
+          }
+        } catch {
+          // Ignore transient polling failures while the analysis is still active.
+        }
+        await sleep(1500);
+      }
+    };
+
     try {
-      set({ isBusy: true, error: null });
-      const taskId = await api.uploadContract(file);
-      const analyzePayload = await api.analyzeContract(taskId);
+      set({
+        isBusy: true,
+        error: null,
+        result: null,
+        auditFocuses: [],
+        verificationItems: [],
+        agentSteps: [],
+      });
+      taskId = await api.uploadContract(file);
+      const initialTask = await api.getContractTask(taskId);
+      set({ task: initialTask });
+
+      await api.analyzeContract(taskId);
+      const finalTask = await pollTask();
+      if (!finalTask) {
+        throw new Error("未能获取解析任务状态。");
+      }
+      if (finalTask.currentStage === "analysis_failed") {
+        throw new Error(finalTask.stageDetail ?? "解析任务失败。");
+      }
+
       const result = await api.getContractResult(taskId);
+      const analyzePayload = await api.analyzeContract(taskId);
       const relations = await api.getRelations();
       const selectedEvidenceId =
         result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null;
 
       set({
+        task: result.task,
         result,
         relations,
         auditFocuses: analyzePayload.auditFocuses ?? [],
@@ -107,6 +151,14 @@ export const useContractStore = create<ContractState>((set, get) => ({
         pages: result.pages.length,
       });
     } catch (error) {
+      if (taskId) {
+        try {
+          const failedTask = await api.getContractTask(taskId);
+          set({ task: failedTask });
+        } catch {
+          // Keep the last visible task state if task polling also fails.
+        }
+      }
       const message = error instanceof Error ? error.message : "加载失败";
       await postFrontendLog(
         "upload_and_analyze_failed",
@@ -121,15 +173,39 @@ export const useContractStore = create<ContractState>((set, get) => ({
   },
 
   async reanalyze() {
-    const current = get().result;
-    if (!current) return;
+    const currentTask = get().task ?? get().result?.task ?? null;
+    if (!currentTask) return;
+
+    const pollTask = async () => {
+      while (true) {
+        try {
+          const task = await api.getContractTask(currentTask.taskId);
+          set({ task });
+          if (task.status !== "processing") {
+            return task;
+          }
+        } catch {
+          // Ignore transient polling failures while the analysis is still active.
+        }
+        await sleep(1500);
+      }
+    };
 
     try {
       set({ isBusy: true, error: null });
-      const analyzePayload = await api.analyzeContract(current.task.taskId);
-      const result = await api.getContractResult(current.task.taskId);
+      await api.analyzeContract(currentTask.taskId);
+      const finalTask = await pollTask();
+      if (!finalTask) {
+        throw new Error("未能获取解析任务状态。");
+      }
+      if (finalTask.currentStage === "analysis_failed") {
+        throw new Error(finalTask.stageDetail ?? "解析任务失败。");
+      }
+      const result = await api.getContractResult(currentTask.taskId);
+      const analyzePayload = await api.analyzeContract(currentTask.taskId);
       const relations = await api.getRelations();
       set({
+        task: result.task,
         result,
         relations,
         auditFocuses: analyzePayload.auditFocuses ?? [],
@@ -139,10 +215,16 @@ export const useContractStore = create<ContractState>((set, get) => ({
         selectedEvidenceId: result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null,
         activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
       });
-      await postFrontendLog("reanalyze_completed", undefined, { taskId: current.task.taskId });
+      await postFrontendLog("reanalyze_completed", undefined, { taskId: currentTask.taskId });
     } catch (error) {
+      try {
+        const failedTask = await api.getContractTask(currentTask.taskId);
+        set({ task: failedTask });
+      } catch {
+        // Keep the last visible task state if task polling also fails.
+      }
       const message = error instanceof Error ? error.message : "重新解析失败";
-      await postFrontendLog("reanalyze_failed", message, { taskId: current.task.taskId }, "error");
+      await postFrontendLog("reanalyze_failed", message, { taskId: currentTask.taskId }, "error");
       set({ error: message });
     } finally {
       set({ isBusy: false });

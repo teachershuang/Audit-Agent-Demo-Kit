@@ -1,5 +1,5 @@
 import type { AgentStep, AuditFocus, VerificationItem } from "../types/audit";
-import type { ContractAnalysisResult } from "../types/contract";
+import type { ContractAnalysisResult, ContractTask } from "../types/contract";
 import type { RelationConfig } from "../types/relation";
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
@@ -53,7 +53,12 @@ export function getApiBaseUrlSync(): string {
 
 async function safeJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(await response.text());
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const payload = (await response.json()) as { detail?: string };
+      throw new Error(payload.detail || `Request failed with status ${response.status}`);
+    }
+    throw new Error((await response.text()) || `Request failed with status ${response.status}`);
   }
 
   return (await response.json()) as T;
@@ -70,8 +75,15 @@ function normalizeAnalyzeResponse(data: AnalyzeResponse): AnalyzeResponse {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = await detectApiBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, init);
-  return await safeJson<T>(response);
+  try {
+    const response = await fetch(`${baseUrl}${path}`, init);
+    return await safeJson<T>(response);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("无法连接解析服务，请检查后端是否仍在运行。");
+    }
+    throw error;
+  }
 }
 
 export async function postFrontendLog(
@@ -134,6 +146,10 @@ export const api = {
       agentSteps: normalized.agentSteps?.length ?? 0,
     });
     return normalized;
+  },
+
+  async getContractTask(taskId: string): Promise<ContractTask> {
+    return await request<ContractTask>(`/api/contracts/${taskId}`);
   },
 
   async getContractResult(taskId: string): Promise<ContractAnalysisResult> {

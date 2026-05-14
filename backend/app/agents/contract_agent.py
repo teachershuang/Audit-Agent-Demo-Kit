@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from app.agents.audit_focus_agent import AuditFocusAgent
 from app.agents.contract_parser_agent import ContractParserAgent
@@ -54,6 +55,7 @@ class ContractAgent:
         relations: list[RelationConfig],
         use_builtin_example: bool,
         file_path: Path | None = None,
+        progress_callback: Callable[[int, str, str], None] | None = None,
     ) -> ContractAgentArtifacts:
         preparation = self.document_service.prepare(
             file_name=task.fileName,
@@ -61,6 +63,8 @@ class ContractAgent:
             use_builtin_example=use_builtin_example,
         )
         plan = self.planner.build_plan(preparation)
+        self._emit_progress(progress_callback, 6, "document_prepared", f"Prepared {preparation.file_type} document.")
+
         agent_steps: list[AgentStep] = [
             self._step("step_001", "接收上传文件", AgentStepStatus.SUCCESS, 60, task.fileName, f"任务 {task.taskId}", "upload_handler"),
             self._step(
@@ -78,59 +82,68 @@ class ContractAgent:
             task_id=task.taskId,
             preparation=preparation,
             output_root=self.storage_dir,
+            progress_callback=progress_callback,
         )
         agent_steps.append(
             self._step(
                 "step_003",
                 "文档预处理与文本抽取",
-                AgentStepStatus.SUCCESS,
+                AgentStepStatus.WARNING if extracted.warnings else AgentStepStatus.SUCCESS,
                 360,
                 ", ".join(plan[:4]),
-                f"{len(extracted.pages)} 页，链路 {extracted.pipeline}",
+                (
+                    f"{len(extracted.pages)} 页，链路 {extracted.pipeline}"
+                    if not extracted.warnings
+                    else f"{len(extracted.pages)} 页，链路 {extracted.pipeline}，有 {len(extracted.warnings)} 页需要人工复核"
+                ),
                 "document_service + ocr_service",
             )
         )
 
         sections = await self.parser_agent.reconstruct_sections(extracted.pages)
+        self._emit_progress(progress_callback, 68, "section_reconstruction", f"Identified {len(sections)} sections.")
         agent_steps.append(
             self._step(
                 "step_004",
                 "章节结构识别",
                 AgentStepStatus.SUCCESS,
                 720,
-                f"{len(extracted.pages)} 页内容",
-                f"识别 {len(sections)} 个章节",
+                f"{len(extracted.pages)} pages",
+                f"Identified {len(sections)} sections",
                 "qwen_service",
             )
         )
 
         clauses = await self.parser_agent.identify_clauses(extracted.pages, sections)
+        self._emit_progress(progress_callback, 78, "clause_tagging", f"Identified {len(clauses)} key clauses.")
         agent_steps.append(
             self._step(
                 "step_005",
                 "条款标签识别",
                 AgentStepStatus.SUCCESS,
                 980,
-                f"{len(sections)} 个章节",
-                f"识别 {len(clauses)} 条关键条款",
+                f"{len(sections)} sections",
+                f"Identified {len(clauses)} clauses",
                 "qwen_service",
             )
         )
 
         key_facts = await self.parser_agent.extract_key_facts(extracted.pages, clauses)
+        self._emit_progress(progress_callback, 86, "fact_extraction", f"Extracted {len(key_facts)} key facts.")
         agent_steps.append(
             self._step(
                 "step_006",
                 "关键信息抽取",
                 AgentStepStatus.SUCCESS,
                 680,
-                f"{len(clauses)} 条条款",
-                f"抽取 {len(key_facts)} 项关键信息",
+                f"{len(clauses)} clauses",
+                f"Extracted {len(key_facts)} key facts",
                 "qwen_service",
             )
         )
 
         self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
+        self._emit_progress(progress_callback, 90, "evidence_mapping", "Mapped extracted results back to source pages.")
         agent_steps.append(
             self._step(
                 "step_007",
@@ -138,7 +151,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 210,
                 "sections / clauses / key facts",
-                f"建立 {sum(len(page.evidences) for page in extracted.pages)} 条证据定位",
+                f"Mapped {sum(len(page.evidences) for page in extracted.pages)} evidence references",
                 "evidence_service",
             )
         )
@@ -149,6 +162,7 @@ class ContractAgent:
             relations=relations,
             key_facts=key_facts,
         )
+        self._emit_progress(progress_callback, 95, "audit_focus_generation", f"Generated {len(audit_focuses)} audit focus items.")
         self._bind_clause_audit_links(clauses, audit_focuses)
         agent_steps.append(
             self._step(
@@ -156,8 +170,8 @@ class ContractAgent:
                 "审计关注事项生成",
                 AgentStepStatus.SUCCESS,
                 840,
-                f"{len(relations)} 项关系配置",
-                f"生成 {len(audit_focuses)} 项关注事项",
+                f"{len(relations)} relation configs",
+                f"Generated {len(audit_focuses)} audit focus items",
                 "audit_focus_agent",
             )
         )
@@ -167,14 +181,15 @@ class ContractAgent:
             clauses=clauses,
             audit_focuses=audit_focuses,
         )
+        self._emit_progress(progress_callback, 98, "verification", f"Built {len(verification_items)} verification records.")
         agent_steps.append(
             self._step(
                 "step_009",
                 "异构校验",
                 AgentStepStatus.SUCCESS,
                 180,
-                f"{len(clauses)} 条条款 / {len(audit_focuses)} 项关注事项",
-                f"输出 {len(verification_items)} 条校验记录",
+                f"{len(clauses)} clauses / {len(audit_focuses)} audit items",
+                f"Built {len(verification_items)} verification records",
                 "verification_agent",
             )
         )
@@ -184,7 +199,11 @@ class ContractAgent:
             clauses=clauses,
             audit_focuses=audit_focuses,
         )
-        task.status = TaskStatus.NEEDS_REVIEW if any(item.needHumanReview for item in clauses) else TaskStatus.COMPLETED
+        task.status = (
+            TaskStatus.NEEDS_REVIEW
+            if extracted.warnings or any(item.needHumanReview for item in clauses)
+            else TaskStatus.COMPLETED
+        )
 
         result = ContractAnalysisResult(
             task=task,
@@ -199,6 +218,17 @@ class ContractAgent:
             verification_items=verification_items,
             agent_steps=agent_steps,
         )
+
+    @staticmethod
+    def _emit_progress(
+        progress_callback: Callable[[int, str, str], None] | None,
+        progress_percent: int,
+        current_stage: str,
+        stage_detail: str,
+    ) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(progress_percent, current_stage, stage_detail)
 
     @staticmethod
     def _bind_clause_audit_links(clauses: list, audit_focuses: list[AuditFocus]) -> None:
@@ -227,5 +257,5 @@ class ContractAgent:
             inputSummary=input_summary,
             outputSummary=output_summary,
             tool=tool,
-            success=True,
+            success=status != AgentStepStatus.WARNING,
         )

@@ -53,6 +53,7 @@ class QwenService:
         prompt: str,
         image_path: Path,
         schema: dict[str, Any],
+        timeout: int = 120,
     ) -> dict[str, Any]:
         if not self.is_available:
             raise RuntimeError("Qwen API key is not configured.")
@@ -76,7 +77,7 @@ class QwenService:
             "temperature": 0.1,
         }
 
-        data = await self._post_chat(payload=payload, timeout=120)
+        data = await self._post_chat(payload=payload, timeout=timeout)
         content = data["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
@@ -89,14 +90,19 @@ class QwenService:
             "Authorization": f"Bearer {self.settings.qwen_api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{self.settings.qwen_base_url.rstrip('/')}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            if response.is_error:
-                raise RuntimeError(f"Qwen API error {response.status_code}: {response.text}")
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{self.settings.qwen_base_url.rstrip('/')}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.is_error:
+                    raise RuntimeError(f"Qwen API error {response.status_code}: {response.text}")
+        except httpx.ReadTimeout as exc:
+            raise RuntimeError(f"Qwen request timed out after {timeout} seconds.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Qwen request failed: {exc}") from exc
         return response.json()
 
     @staticmethod

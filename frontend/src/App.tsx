@@ -10,6 +10,7 @@ import { useContractStore } from "./store/contractStore";
 
 function App() {
   const {
+    task,
     result,
     relations,
     auditFocuses,
@@ -50,7 +51,11 @@ function App() {
 
   const leftPanel = !result ? (
     isBusy ? (
-      <LoadingState label="正在启动解析任务..." />
+      <LoadingState
+        label={task?.currentStage === "ocr_running" ? "正在识别扫描页文本..." : "正在启动解析任务..."}
+        detail={task?.stageDetail ?? "正在准备文档并调用解析链路。"}
+        progress={task?.progressPercent ?? 0}
+      />
     ) : (
       <EmptyState
         title="上传合同开始分析"
@@ -71,7 +76,11 @@ function App() {
 
   const rightPanel = !result ? (
     isBusy ? (
-      <LoadingState label="等待解析结果..." />
+      <LoadingState
+        label="等待解析结果..."
+        detail={task?.stageDetail ?? "章节、条款、证据与关注事项正在生成。"}
+        progress={task?.progressPercent ?? 0}
+      />
     ) : (
       <EmptyState
         title="结果区待加载"
@@ -111,6 +120,7 @@ function App() {
 
   const completedSteps = agentSteps?.length ?? 0;
   const externalPendingCount = verificationItems?.filter((item) => item.needExternalTool).length ?? 0;
+  const currentTask = task ?? result?.task ?? null;
 
   const footer = result ? (
     <footer className="glass-panel rounded-[24px] border border-white/8 px-5 py-4">
@@ -137,7 +147,9 @@ function App() {
     </footer>
   ) : (
     <footer className="rounded-[24px] border border-dashed border-white/8 px-5 py-4 text-sm text-slate-400">
-      工作台已就绪
+      {isBusy
+        ? `处理中 ${currentTask?.progressPercent ?? 0}% · ${currentTask?.stageDetail ?? "等待服务返回进度"}`
+        : "工作台已就绪"}
     </footer>
   );
 
@@ -146,7 +158,7 @@ function App() {
       header={
         <div className="space-y-3">
           <HeaderBar
-            task={result?.task ?? null}
+            task={currentTask}
             busy={isBusy}
             onLoadSample={() => void loadSample()}
             onUpload={(file) => void uploadAndAnalyze(file)}

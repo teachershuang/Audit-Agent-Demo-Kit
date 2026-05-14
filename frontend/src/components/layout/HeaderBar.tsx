@@ -43,18 +43,39 @@ export function HeaderBar({
             <p className="mt-2 text-sm text-slate-300">
               合同结构、关键条款、证据定位与审计关注事项统一呈现。
             </p>
+            {task?.stageDetail ? (
+              <p className="mt-2 text-xs text-cyan-100/80">
+                当前阶段：{task.stageDetail}
+              </p>
+            ) : null}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 xl:items-end">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-              任务状态 {task ? statusMap[task.status] : "待上传"}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-              模型 {task?.modelName ?? "Qwen"}
-            </span>
-            <ConfidenceBadge value={task?.confidenceOverview.overall ?? 0.86} label="总览" />
+        <div className="flex flex-col gap-3 xl:min-w-[420px] xl:items-end">
+          <div className="flex w-full flex-col gap-2 xl:items-end">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
+                任务状态 {task ? statusMap[task.status] : "待上传"}
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
+                模型 {task?.modelName ?? "Qwen"}
+              </span>
+              <ConfidenceBadge value={task?.confidenceOverview.overall ?? 0.86} label="总览" />
+            </div>
+            {busy && task ? (
+              <div className="w-full max-w-[340px]">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>{task.currentStage ?? "processing"}</span>
+                  <span>{task.progressPercent}%</span>
+                </div>
+                <div className="h-2 rounded-full bg-white/8">
+                  <div
+                    className="h-2 rounded-full bg-gradient-to-r from-cyan-400 to-sky-300 transition-all duration-500"
+                    style={{ width: `${task.progressPercent}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap gap-2">

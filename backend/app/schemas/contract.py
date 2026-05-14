@@ -90,6 +90,10 @@ class ContractTask(BaseModel):
     createdAt: str
     modelName: str
     confidenceOverview: ConfidenceOverview
+    progressPercent: int = 0
+    currentStage: str | None = None
+    stageDetail: str | None = None
+    elapsedMs: int = 0
 
 
 class ContractAnalysisResult(BaseModel):

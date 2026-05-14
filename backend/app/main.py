@@ -74,6 +74,7 @@ async def request_logging_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception as exc:
         duration_ms = round((perf_counter() - started) * 1000, 2)
+        detail = str(exc).strip() or exc.__class__.__name__
         app_logger.exception(
             json_dumps(
                 {
@@ -83,11 +84,11 @@ async def request_logging_middleware(request: Request, call_next):
                     "query": dict(request.query_params),
                     "durationMs": duration_ms,
                     "client": request.client.host if request.client else None,
-                    "error": str(exc),
+                    "error": detail,
                 }
             )
         )
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     duration_ms = round((perf_counter() - started) * 1000, 2)
     app_logger.info(

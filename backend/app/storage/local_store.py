@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import asyncio
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 from uuid import uuid4
 
@@ -22,6 +24,8 @@ class TaskRecord:
     audit_focuses: list[AuditFocus] = field(default_factory=list)
     verification_items: list[VerificationItem] = field(default_factory=list)
     agent_steps: list[AgentStep] = field(default_factory=list)
+    started_at_perf: float = field(default_factory=perf_counter)
+    analysis_job: asyncio.Task | None = None
 
 
 class LocalStore:
@@ -46,6 +50,10 @@ class LocalStore:
             createdAt=datetime.now().astimezone().isoformat(timespec="seconds"),
             modelName=model_name,
             confidenceOverview={"overall": 0.0, "sections": 0.0, "clauses": 0.0, "audit": 0.0, "warnings": 0},
+            progressPercent=4,
+            currentStage="file_received",
+            stageDetail="File received and waiting for analysis.",
+            elapsedMs=0,
         )
         record = TaskRecord(
             task=task,
@@ -69,12 +77,37 @@ class LocalStore:
         agent_steps: list[AgentStep],
     ) -> TaskRecord:
         record = self.get_task(task_id)
+        result.task.elapsedMs = int((perf_counter() - record.started_at_perf) * 1000)
+        result.task.progressPercent = 100
+        result.task.currentStage = "completed"
+        result.task.stageDetail = "Analysis result is ready."
         record.task = result.task
         record.result = result
         record.audit_focuses = audit_focuses
         record.verification_items = verification_items
         record.agent_steps = agent_steps
         return record
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        status: TaskStatus | None = None,
+        progress_percent: int | None = None,
+        current_stage: str | None = None,
+        stage_detail: str | None = None,
+    ) -> ContractTask:
+        record = self.get_task(task_id)
+        if status is not None:
+            record.task.status = status
+        if progress_percent is not None:
+            record.task.progressPercent = max(0, min(100, progress_percent))
+        if current_stage is not None:
+            record.task.currentStage = current_stage
+        if stage_detail is not None:
+            record.task.stageDetail = stage_detail
+        record.task.elapsedMs = int((perf_counter() - record.started_at_perf) * 1000)
+        return record.task
 
     def list_relations(self) -> list[RelationConfig]:
         return self._relations
