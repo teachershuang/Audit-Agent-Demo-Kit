@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from typing import Any
+from typing import Any, TypeVar
 
+from app.config import Settings
 from app.schemas.contract import ClauseTag, ContractPage, ContractSection, KeyFact
 from app.services.qwen_service import QwenService
 
@@ -24,31 +26,37 @@ CLAUSE_LABELS = [
     "\u5176\u4ed6\u91cd\u8981\u6761\u6b3e",
 ]
 
+T = TypeVar("T")
+
 
 class ContractParserAgent:
-    def __init__(self, qwen_service: QwenService) -> None:
+    def __init__(self, qwen_service: QwenService, settings: Settings) -> None:
         self.qwen_service = qwen_service
+        self.settings = settings
+        self.parallelism = max(1, settings.qwen_parallel_requests)
+        self.section_batch_size = max(2, settings.section_batch_size)
+        self.section_batch_overlap = max(0, settings.section_batch_overlap)
+        self.clause_batch_size = max(2, settings.clause_batch_size)
+        self.key_fact_batch_size = max(3, settings.key_fact_batch_size)
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
-        payload = await self.qwen_service.chat_json(
-            system_prompt=(
-                "You are an expert in contract structure reconstruction. "
-                "The source document is a Chinese contract. Identify only sections that truly exist in the source text. "
-                "For each section, return title, level, page, summary, confidence, and a supporting text snippet. "
-                "If the section boundary is unclear, lower the confidence instead of inventing sections."
-            ),
-            user_prompt=(
-                f"Contract page digest:\n{json.dumps(self._pages_payload(pages), ensure_ascii=False)}\n"
-                "Return a JSON object. Prefer a top-level `sections` array."
-            ),
-            schema={"type": "object"},
-            timeout=180,
-        )
+        if len(pages) <= max(self.section_batch_size * 3, 12):
+            raw_sections = await self._request_sections(pages)
+        else:
+            batches = self._page_batches(
+                pages=pages,
+                batch_size=self.section_batch_size,
+                overlap=self.section_batch_overlap,
+            )
+            batch_results = await self._gather_limited(
+                [self._request_sections(batch) for batch in batches],
+                limit=min(self.parallelism, len(batches)),
+            )
+            merged_candidates: list[dict[str, Any]] = []
+            for batch in batch_results:
+                merged_candidates.extend(batch)
+            raw_sections = await self._merge_section_candidates(merged_candidates)
 
-        raw_sections = self._pick_first_array(
-            payload,
-            ["sections", "chapterTree", "chapter_tree", "\u7ae0\u8282", "\u7ae0\u8282\u6811"],
-        )
         sections: list[ContractSection] = []
         for index, item in enumerate(raw_sections, start=1):
             title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
@@ -79,39 +87,12 @@ class ContractParserAgent:
         pages: list[ContractPage],
         sections: list[ContractSection],
     ) -> list[ClauseTag]:
-        section_payload = [
-            {
-                "id": item.id,
-                "title": item.title,
-                "level": item.level,
-                "page": item.page,
-                "summary": item.summary,
-            }
-            for item in sections[:40]
-        ]
-        payload = await self.qwen_service.chat_json(
-            system_prompt=(
-                "You are an expert at identifying key clauses in Chinese contracts for audit and risk review. "
-                f"Only use these labels: {', '.join(CLAUSE_LABELS)}. "
-                "For each clause, return label, title, summary, rawText, page, confidence, and needHumanReview. "
-                "Do not invent clauses that do not exist."
-            ),
-            user_prompt=(
-                f"Contract page digest:\n{json.dumps(self._pages_payload(pages), ensure_ascii=False)}\n"
-                f"Recognized sections:\n{json.dumps(section_payload, ensure_ascii=False)}\n"
-                "Return a JSON object. Prefer a top-level `clauses` array. "
-                "If you prefer a structured object keyed by label, only use the allowed labels as top-level keys."
-            ),
-            schema={"type": "object"},
-            timeout=180,
-        )
-
-        raw_clauses = self._pick_first_array(
-            payload,
-            ["clauses", "clauseTags", "clause_tags", "\u6761\u6b3e", "\u6761\u6b3e\u6807\u7b7e"],
-        )
-        if not raw_clauses:
-            raw_clauses = self._clauses_from_structured_payload(payload)
+        page_batches = self._page_batches(pages=pages, batch_size=self.clause_batch_size, overlap=0)
+        tasks = [self._request_clauses(batch, sections) for batch in page_batches]
+        raw_batches = await self._gather_limited(tasks, limit=min(self.parallelism, len(tasks)))
+        raw_clauses: list[dict[str, Any]] = []
+        for batch in raw_batches:
+            raw_clauses.extend(batch)
 
         clauses: list[ClauseTag] = []
         for index, item in enumerate(raw_clauses, start=1):
@@ -136,46 +117,21 @@ class ContractParserAgent:
                     relatedAuditFocusIds=[],
                 )
             )
-        return clauses
+        return self._dedupe_clauses(clauses)
 
     async def extract_key_facts(
         self,
         pages: list[ContractPage],
         clauses: list[ClauseTag],
     ) -> list[KeyFact]:
-        clause_payload = [
-            {
-                "id": item.id,
-                "label": item.label,
-                "title": item.title,
-                "summary": item.summary,
-                "rawText": item.rawText[:500],
-                "page": item.page,
-                "confidence": item.confidence,
-            }
-            for item in clauses[:60]
-        ]
-
-        payload = await self.qwen_service.chat_json(
-            system_prompt=(
-                "You extract key facts from Chinese contracts. "
-                "Focus on parties, contract amount, payment conditions, performance period, acceptance standard, "
-                "dispute resolution, and account information. "
-                "For each fact, return label, value, page, confidence, and optional notes. "
-                "Do not invent facts that are not supported by the clauses."
-            ),
-            user_prompt=(
-                f"Recognized clauses:\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
-                "Return a JSON object. Prefer a top-level `keyFacts` array."
-            ),
-            schema={"type": "object"},
-            timeout=120,
+        clause_batches = self._chunk_items(clauses, self.key_fact_batch_size)
+        raw_batches = await self._gather_limited(
+            [self._request_key_facts(batch) for batch in clause_batches],
+            limit=min(self.parallelism, len(clause_batches)),
         )
-
-        raw_facts = self._pick_first_array(
-            payload,
-            ["keyFacts", "facts", "key_facts", "\u5173\u952e\u4fe1\u606f"],
-        )
+        raw_facts: list[dict[str, Any]] = []
+        for batch in raw_batches:
+            raw_facts.extend(batch)
         facts: list[KeyFact] = []
         for index, item in enumerate(raw_facts, start=1):
             label = self._clean(item.get("label") or item.get("name"))
@@ -196,8 +152,146 @@ class ContractParserAgent:
             )
 
         if facts:
-            return facts
+            return self._dedupe_key_facts(facts)
         return self._derive_key_facts_from_clauses(clauses)
+
+    async def _request_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You are an expert in contract structure reconstruction. "
+                "The source document is a Chinese contract. Identify only sections that truly exist in the source text. "
+                "For each section, return title, level, page, summary, confidence, and a supporting text snippet. "
+                "If the section boundary is unclear, lower the confidence instead of inventing sections."
+            ),
+            user_prompt=(
+                f"Contract page digest:\n{json.dumps(self._pages_payload(pages), ensure_ascii=False)}\n"
+                "Return a JSON object. Prefer a top-level `sections` array."
+            ),
+            schema={"type": "object"},
+            timeout=120,
+        )
+        return self._pick_first_array(
+            payload,
+            ["sections", "chapterTree", "chapter_tree", "\u7ae0\u8282", "\u7ae0\u8282\u6811"],
+        )
+
+    async def _merge_section_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        compact_candidates = []
+        seen: set[tuple[str, int]] = set()
+        for item in candidates:
+            title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
+            page = self._safe_int(item.get("page")) or 1
+            key = (title, page)
+            if not title or key in seen:
+                continue
+            seen.add(key)
+            compact_candidates.append(
+                {
+                    "title": title,
+                    "level": self._safe_int(item.get("level")) or 1,
+                    "page": page,
+                    "summary": self._clean(item.get("summary") or item.get("snippet") or item.get("text"))[:160],
+                    "confidence": item.get("confidence"),
+                    "evidenceText": self._clean(
+                        item.get("evidenceText") or item.get("snippet") or item.get("text") or item.get("rawText")
+                    )[:200],
+                }
+            )
+
+        if len(compact_candidates) <= 1:
+            return compact_candidates
+
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You consolidate candidate contract sections from multiple page batches. "
+                "Merge duplicates, keep the original document order, and preserve real section titles only."
+            ),
+            user_prompt=(
+                f"Section candidates:\n{json.dumps(compact_candidates, ensure_ascii=False)}\n"
+                "Return a JSON object with a top-level `sections` array."
+            ),
+            schema={"type": "object"},
+            timeout=90,
+        )
+        merged = self._pick_first_array(
+            payload,
+            ["sections", "chapterTree", "chapter_tree", "\u7ae0\u8282", "\u7ae0\u8282\u6811"],
+        )
+        return merged or compact_candidates
+
+    async def _request_clauses(
+        self,
+        pages: list[ContractPage],
+        sections: list[ContractSection],
+    ) -> list[dict[str, Any]]:
+        page_numbers = {page.page for page in pages}
+        section_payload = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "level": item.level,
+                "page": item.page,
+                "summary": item.summary,
+            }
+            for item in sections
+            if item.page in page_numbers
+        ][:40]
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You are an expert at identifying key clauses in Chinese contracts for audit and risk review. "
+                f"Only use these labels: {', '.join(CLAUSE_LABELS)}. "
+                "For each clause, return label, title, summary, rawText, page, confidence, and needHumanReview. "
+                "Do not invent clauses that do not exist."
+            ),
+            user_prompt=(
+                f"Contract page digest:\n{json.dumps(self._pages_payload(pages), ensure_ascii=False)}\n"
+                f"Recognized sections:\n{json.dumps(section_payload, ensure_ascii=False)}\n"
+                "Return a JSON object. Prefer a top-level `clauses` array. "
+                "If you prefer a structured object keyed by label, only use the allowed labels as top-level keys."
+            ),
+            schema={"type": "object"},
+            timeout=120,
+        )
+        raw_clauses = self._pick_first_array(
+            payload,
+            ["clauses", "clauseTags", "clause_tags", "\u6761\u6b3e", "\u6761\u6b3e\u6807\u7b7e"],
+        )
+        if not raw_clauses:
+            raw_clauses = self._clauses_from_structured_payload(payload)
+        return raw_clauses
+
+    async def _request_key_facts(self, clauses: list[ClauseTag]) -> list[dict[str, Any]]:
+        clause_payload = [
+            {
+                "id": item.id,
+                "label": item.label,
+                "title": item.title,
+                "summary": item.summary,
+                "rawText": item.rawText[:500],
+                "page": item.page,
+                "confidence": item.confidence,
+            }
+            for item in clauses[:60]
+        ]
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You extract key facts from Chinese contracts. "
+                "Focus on parties, contract amount, payment conditions, performance period, acceptance standard, "
+                "dispute resolution, and account information. "
+                "For each fact, return label, value, page, confidence, and optional notes. "
+                "Do not invent facts that are not supported by the clauses."
+            ),
+            user_prompt=(
+                f"Recognized clauses:\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
+                "Return a JSON object. Prefer a top-level `keyFacts` array."
+            ),
+            schema={"type": "object"},
+            timeout=90,
+        )
+        return self._pick_first_array(
+            payload,
+            ["keyFacts", "facts", "key_facts", "\u5173\u952e\u4fe1\u606f"],
+        )
 
     @staticmethod
     def _clauses_from_structured_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -424,3 +518,77 @@ class ContractParserAgent:
                     parts.append(f"{key}\uff1a{item_text}")
             return "\uff1b".join(parts)
         return ContractParserAgent._clean(json.dumps(value, ensure_ascii=False))
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _chunk_items(items: list[T], batch_size: int) -> list[list[T]]:
+        if not items:
+            return []
+        return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
+
+    @classmethod
+    def _page_batches(
+        cls,
+        pages: list[ContractPage],
+        batch_size: int,
+        overlap: int,
+    ) -> list[list[ContractPage]]:
+        if not pages:
+            return []
+        step = max(1, batch_size - overlap)
+        batches: list[list[ContractPage]] = []
+        for index in range(0, len(pages), step):
+            batch = pages[index : index + batch_size]
+            if not batch:
+                continue
+            batches.append(batch)
+            if index + batch_size >= len(pages):
+                break
+        return batches
+
+    async def _gather_limited(self, coroutines: list[Any], limit: int) -> list[Any]:
+        semaphore = asyncio.Semaphore(max(1, limit))
+
+        async def run(coroutine: Any) -> Any:
+            async with semaphore:
+                return await coroutine
+
+        return list(await asyncio.gather(*(run(coroutine) for coroutine in coroutines)))
+
+    @staticmethod
+    def _dedupe_clauses(clauses: list[ClauseTag]) -> list[ClauseTag]:
+        best_by_key: dict[str, ClauseTag] = {}
+        for clause in clauses:
+            current = best_by_key.get(clause.label)
+            if current is None:
+                best_by_key[clause.label] = clause
+                continue
+            candidate_score = (clause.confidence, len(clause.rawText))
+            current_score = (current.confidence, len(current.rawText))
+            if candidate_score > current_score:
+                best_by_key[clause.label] = clause
+        deduped = list(best_by_key.values())
+        deduped.sort(key=lambda item: (item.page, CLAUSE_LABELS.index(item.label) if item.label in CLAUSE_LABELS else 99))
+        for index, clause in enumerate(deduped, start=1):
+            clause.id = f"clause_{index:03d}"
+        return deduped
+
+    @staticmethod
+    def _dedupe_key_facts(facts: list[KeyFact]) -> list[KeyFact]:
+        best_by_key: dict[tuple[str, str, int], KeyFact] = {}
+        for fact in facts:
+            key = (fact.label, fact.value, fact.page)
+            current = best_by_key.get(key)
+            if current is None or fact.confidence > current.confidence:
+                best_by_key[key] = fact
+        deduped = list(best_by_key.values())
+        deduped.sort(key=lambda item: (item.page, item.label, item.value))
+        for index, fact in enumerate(deduped, start=1):
+            fact.id = f"fact_{index:03d}"
+        return deduped

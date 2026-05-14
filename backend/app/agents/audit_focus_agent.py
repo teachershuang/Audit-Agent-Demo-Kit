@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -21,43 +22,35 @@ class AuditFocusAgent:
         key_facts: list[KeyFact],
     ) -> list[AuditFocus]:
         clause_map = {item.id: item for item in clauses}
-        clause_payload = [
-            {
-                "id": item.id,
-                "label": item.label,
-                "title": item.title,
-                "summary": item.summary,
-                "page": item.page,
-                "confidence": item.confidence,
-            }
-            for item in clauses
-        ]
-
-        payload = await self.qwen_service.chat_json(
-            system_prompt=(
-                "You are an audit-risk analysis agent for Chinese contracts. "
-                "Generate audit focus items based on sections, clauses, key facts, and relation configuration. "
-                "Do not output final audit conclusions. Only output focus directions, suspected risks, or items pending verification. "
-                "For related-party transactions, supplier relationships, and account anomalies, only describe them as suspected or pending external verification. "
-                "Every item must include reason, evidence clause ids, location text, current basis, suggested future tools, and human review suggestion."
-            ),
-            user_prompt=(
-                f"Sections: {json.dumps([item.model_dump() for item in sections], ensure_ascii=False)}\n"
-                f"Clauses: {json.dumps(clause_payload, ensure_ascii=False)}\n"
-                f"Key facts: {json.dumps([item.model_dump() for item in key_facts], ensure_ascii=False)}\n"
-                f"Relation config: {json.dumps([item.model_dump() for item in relations], ensure_ascii=False)}\n"
-                "Return an `auditFocuses` array. `evidenceClauseIds` must use the provided clause ids. "
-                "Cover payment terms, acceptance standard, breach liability, contract party completeness, account information, "
-                "supplier relationship, and related-party suspicion when supported."
-            ),
-            schema={"type": "object"},
-            timeout=120,
-        )
-
-        raw_items = self._pick_first_array(
-            payload,
-            ["auditFocuses", "\u5173\u6ce8\u4e8b\u9879", "audit_focuses"],
-        )
+        if len(clauses) > 8:
+            clause_groups = self._build_clause_groups(clauses, relations, key_facts)
+            payloads = await asyncio.gather(
+                *[
+                    self._request_focus_batch(
+                        sections=sections,
+                        clauses=group["clauses"],
+                        relations=group["relations"],
+                        key_facts=group["key_facts"],
+                        focus_hint=group["focus_hint"],
+                    )
+                    for group in clause_groups
+                    if group["clauses"]
+                ]
+            )
+            raw_items: list[dict[str, Any]] = []
+            for payload in payloads:
+                raw_items.extend(
+                    self._pick_first_array(payload, ["auditFocuses", "\u5173\u6ce8\u4e8b\u9879", "audit_focuses"])
+                )
+        else:
+            payload = await self._request_focus_batch(
+                sections=sections,
+                clauses=clauses,
+                relations=relations,
+                key_facts=key_facts,
+                focus_hint="general",
+            )
+            raw_items = self._pick_first_array(payload, ["auditFocuses", "\u5173\u6ce8\u4e8b\u9879", "audit_focuses"])
         valid_clause_ids = {item.id for item in clauses}
         audit_focuses: list[AuditFocus] = []
         for index, item in enumerate(raw_items, start=1):
@@ -97,7 +90,124 @@ class AuditFocusAgent:
                     ).strip(),
                 )
             )
-        return audit_focuses
+        return self._dedupe_audit_focuses(audit_focuses)
+
+    async def _request_focus_batch(
+        self,
+        sections: list[ContractSection],
+        clauses: list[ClauseTag],
+        relations: list[RelationConfig],
+        key_facts: list[KeyFact],
+        focus_hint: str,
+    ) -> dict[str, Any]:
+        clause_payload = [
+            {
+                "id": item.id,
+                "label": item.label,
+                "title": item.title,
+                "summary": item.summary,
+                "page": item.page,
+                "confidence": item.confidence,
+            }
+            for item in clauses
+        ]
+        return await self.qwen_service.chat_json(
+            system_prompt=(
+                "You are an audit-risk analysis agent for Chinese contracts. "
+                "Generate audit focus items based on sections, clauses, key facts, and relation configuration. "
+                "Do not output final audit conclusions. Only output focus directions, suspected risks, or items pending verification. "
+                "For related-party transactions, supplier relationships, and account anomalies, only describe them as suspected or pending external verification. "
+                "Every item must include reason, evidence clause ids, location text, current basis, suggested future tools, and human review suggestion."
+            ),
+            user_prompt=(
+                f"Focus theme: {focus_hint}\n"
+                f"Sections: {json.dumps([item.model_dump() for item in sections], ensure_ascii=False)}\n"
+                f"Clauses: {json.dumps(clause_payload, ensure_ascii=False)}\n"
+                f"Key facts: {json.dumps([item.model_dump() for item in key_facts], ensure_ascii=False)}\n"
+                f"Relation config: {json.dumps([item.model_dump() for item in relations], ensure_ascii=False)}\n"
+                "Return an `auditFocuses` array. `evidenceClauseIds` must use the provided clause ids. "
+                "Keep only focus items that are directly supported by the provided clauses and the theme."
+            ),
+            schema={"type": "object"},
+            timeout=90,
+        )
+
+    @staticmethod
+    def _build_clause_groups(
+        clauses: list[ClauseTag],
+        relations: list[RelationConfig],
+        key_facts: list[KeyFact],
+    ) -> list[dict[str, Any]]:
+        base_labels = {
+            "\u4ed8\u6b3e\u6761\u4ef6",
+            "\u9a8c\u6536\u6807\u51c6",
+            "\u8fdd\u7ea6\u8d23\u4efb",
+            "\u6743\u5229\u4e49\u52a1",
+            "\u4fdd\u5bc6\u6761\u6b3e",
+            "\u4e89\u8bae\u89e3\u51b3",
+            "\u9644\u4ef6\u6761\u6b3e",
+        }
+        relation_labels = {
+            "\u7532\u4e59\u65b9\u4fe1\u606f",
+            "\u8d26\u6237\u4fe1\u606f",
+            "\u5408\u540c\u91d1\u989d",
+            "\u4ed8\u6b3e\u6761\u4ef6",
+            "\u5176\u4ed6\u91cd\u8981\u6761\u6b3e",
+        }
+        groups = []
+        base_clauses = [item for item in clauses if item.label in base_labels]
+        relation_clauses = [item for item in clauses if item.label in relation_labels]
+        groups.append(
+            {
+                "focus_hint": "performance, payment, acceptance, obligation, breach",
+                "clauses": base_clauses or clauses[: max(1, len(clauses) // 2)],
+                "relations": [],
+                "key_facts": [
+                    item
+                    for item in key_facts
+                    if item.label
+                    in {
+                        "\u4ed8\u6b3e\u6761\u4ef6",
+                        "\u9a8c\u6536\u6807\u51c6",
+                        "\u4e89\u8bae\u89e3\u51b3",
+                        "\u5408\u540c\u91d1\u989d",
+                    }
+                ],
+            }
+        )
+        groups.append(
+            {
+                "focus_hint": "contract parties, account, supplier relationship, related-party suspicion",
+                "clauses": relation_clauses or clauses[max(1, len(clauses) // 2) :],
+                "relations": relations,
+                "key_facts": [
+                    item
+                    for item in key_facts
+                    if item.label
+                    in {
+                        "\u7532\u65b9",
+                        "\u4e59\u65b9",
+                        "\u8d26\u6237\u4fe1\u606f",
+                        "\u5408\u540c\u91d1\u989d",
+                    }
+                ],
+            }
+        )
+        return groups
+
+    @staticmethod
+    def _dedupe_audit_focuses(items: list[AuditFocus]) -> list[AuditFocus]:
+        best_by_key: dict[tuple[str, tuple[str, ...]], AuditFocus] = {}
+        for item in items:
+            key = (item.title, tuple(sorted(item.evidenceClauseIds)))
+            current = best_by_key.get(key)
+            if current is None or item.confidence > current.confidence:
+                best_by_key[key] = item
+        deduped = list(best_by_key.values())
+        deduped.sort(key=lambda item: (-item.confidence, item.title))
+        for index, item in enumerate(deduped, start=1):
+            item.id = f"audit_{index:03d}"
+        return deduped
 
     @staticmethod
     def _pick_first_array(payload: dict[str, Any], keys: list[str]) -> list[dict[str, Any]]:

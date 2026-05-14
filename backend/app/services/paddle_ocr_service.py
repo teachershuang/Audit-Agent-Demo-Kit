@@ -20,9 +20,10 @@ class PaddleOCRLine:
 
 
 class PaddleOCRService:
-    def __init__(self, python_executable: str, timeout_seconds: int) -> None:
+    def __init__(self, python_executable: str, timeout_seconds: int, batch_size: int = 3) -> None:
         self.python_executable = Path(python_executable)
         self.timeout_seconds = timeout_seconds
+        self.batch_size = max(1, batch_size)
         self.worker_script = Path(__file__).resolve().parents[1] / "tools" / "paddle_ocr_worker.py"
 
     @property
@@ -32,13 +33,30 @@ class PaddleOCRService:
     async def extract_pages(self, pages: list[dict[str, object]]) -> dict[int, list[PaddleOCRLine]]:
         if not self.is_available:
             raise RuntimeError(f"Paddle OCR runtime is not available: {self.python_executable}")
+        if not pages:
+            return {}
 
-        payload = json.dumps({"pages": pages}, ensure_ascii=False)
+        results: dict[int, list[PaddleOCRLine]] = {}
+        for batch_index, batch in enumerate(self._chunk_pages(pages), start=1):
+            batch_results = await self._extract_batch(batch=batch, batch_index=batch_index)
+            results.update(batch_results)
+        return results
+
+    async def _extract_batch(
+        self,
+        batch: list[dict[str, object]],
+        batch_index: int,
+    ) -> dict[int, list[PaddleOCRLine]]:
+        payload = json.dumps({"pages": batch}, ensure_ascii=False)
+        page_numbers = [int(item["page"]) for item in batch]
+
         app_logger.info(
             json_dumps(
                 {
                     "event": "paddle_ocr_batch_started",
-                    "pageCount": len(pages),
+                    "pageCount": len(batch),
+                    "pages": page_numbers,
+                    "batchIndex": batch_index,
                     "pythonExecutable": str(self.python_executable),
                 }
             )
@@ -89,8 +107,13 @@ class PaddleOCRService:
                 {
                     "event": "paddle_ocr_batch_completed",
                     "pageCount": len(results),
+                    "pages": sorted(results),
+                    "batchIndex": batch_index,
                     "stderrSummary": stderr_text[:300] if stderr_text else None,
                 }
             )
         )
         return results
+
+    def _chunk_pages(self, pages: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+        return [pages[index : index + self.batch_size] for index in range(0, len(pages), self.batch_size)]

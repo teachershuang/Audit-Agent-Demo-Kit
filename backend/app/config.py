@@ -10,7 +10,7 @@ ROOT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    app_name: str = "合同智能解析与审计关注点 Agent"
+    app_name: str = "Contract Audit Agent"
     app_env: str = "development"
     cors_allow_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
@@ -25,7 +25,13 @@ class Settings(BaseSettings):
     enable_vl_ocr_enhancement: bool = True
     paddle_python_executable: str = "C:/Users/26423/.conda/envs/paddle_test/python.exe"
     paddle_ocr_timeout_seconds: int = 240
-    scanned_vl_concurrency: int = 1
+    paddle_ocr_batch_size: int = 3
+    scanned_vl_concurrency: int = 6
+    qwen_parallel_requests: int = 10
+    section_batch_size: int = 4
+    section_batch_overlap: int = 1
+    clause_batch_size: int = 4
+    key_fact_batch_size: int = 6
 
     storage_dir: str = "uploads"
 

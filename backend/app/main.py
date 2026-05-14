@@ -35,6 +35,7 @@ document_service = DocumentService()
 paddle_ocr_service = PaddleOCRService(
     python_executable=settings.paddle_python_executable,
     timeout_seconds=settings.paddle_ocr_timeout_seconds,
+    batch_size=settings.paddle_ocr_batch_size,
 )
 ocr_service = OCRService(
     settings=settings,
@@ -44,7 +45,7 @@ ocr_service = OCRService(
 evidence_service = EvidenceService()
 confidence_service = ConfidenceService()
 planner = Planner()
-parser_agent = ContractParserAgent(qwen_service=qwen_service)
+parser_agent = ContractParserAgent(qwen_service=qwen_service, settings=settings)
 audit_focus_agent = AuditFocusAgent(qwen_service=qwen_service)
 verification_agent = VerificationAgent()
 relation_config_service = RelationConfigService(store=store)
