@@ -466,7 +466,10 @@ class OCRService:
         avg_score = mean(line.score for line in lines)
         short_ratio = sum(1 for line in lines if len(line.text.strip()) <= 2) / len(lines)
         fragmented_ratio = sum(1 for line in lines if len(line.text.strip()) <= 6) / len(lines)
-        return avg_score < 0.87 or short_ratio > 0.40 or (len(lines) >= 30 and fragmented_ratio > 0.58)
+        severe_quality_drop = avg_score < 0.82
+        low_confidence_fragmentation = avg_score < 0.90 and short_ratio > 0.55
+        dense_unstable_layout = avg_score < 0.93 and len(lines) >= 45 and fragmented_ratio > 0.72
+        return severe_quality_drop or low_confidence_fragmentation or dense_unstable_layout
 
     @staticmethod
     def _group_lines_by_layout(lines: list[PaddleOCRLine]) -> list[DocumentBlock]:
