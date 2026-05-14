@@ -22,6 +22,10 @@ class AuditFocusAgent:
         key_facts: list[KeyFact],
     ) -> list[AuditFocus]:
         clause_map = {item.id: item for item in clauses}
+        derived_focuses = self._derive_focuses_locally(clauses=clauses, relations=relations, key_facts=key_facts)
+        if self._derived_focuses_are_sufficient(derived_focuses):
+            return self._dedupe_audit_focuses(derived_focuses)
+
         if len(clauses) > 8:
             clause_groups = self._build_clause_groups(clauses, relations, key_facts)
             payloads = await asyncio.gather(
@@ -90,7 +94,7 @@ class AuditFocusAgent:
                     ).strip(),
                 )
             )
-        return self._dedupe_audit_focuses(audit_focuses)
+        return self._dedupe_audit_focuses(derived_focuses + audit_focuses)
 
     async def _request_focus_batch(
         self,
@@ -194,6 +198,176 @@ class AuditFocusAgent:
             }
         )
         return groups
+
+    @staticmethod
+    def _derive_focuses_locally(
+        clauses: list[ClauseTag],
+        relations: list[RelationConfig],
+        key_facts: list[KeyFact],
+    ) -> list[AuditFocus]:
+        clause_by_label = {item.label: item for item in clauses}
+        fact_labels = {item.label for item in key_facts}
+        relation_names = {item.name for item in relations if item.enabled}
+        focuses: list[AuditFocus] = []
+
+        def add_focus(
+            title: str,
+            risk_level: str,
+            reason: str,
+            clause_ids: list[str],
+            depends_on: list[str],
+            future_tools: list[str],
+            confidence: float = 0.78,
+            current_basis: str = "当前基于合同文本、OCR结果和规则化语义恢复生成，仍需结合外部系统核验。",
+            location_text: str = "",
+            human_review_suggestion: str = "建议审计人员结合原文和业务单据进一步复核。",
+        ) -> None:
+            valid_clause_ids = [clause_id for clause_id in clause_ids if clause_id]
+            if not valid_clause_ids:
+                return
+            focuses.append(
+                AuditFocus(
+                    id=f"audit_local_{len(focuses) + 1:03d}",
+                    title=title,
+                    riskLevel=AuditFocusAgent._normalize_risk_level(risk_level),
+                    reason=reason,
+                    evidenceClauseIds=valid_clause_ids,
+                    locationText=location_text,
+                    confidence=max(0.55, min(confidence, 0.95)),
+                    dependsOn=depends_on,
+                    currentBasis=current_basis,
+                    futureTools=future_tools,
+                    modelOnly=False,
+                    humanReviewSuggestion=human_review_suggestion,
+                )
+            )
+
+        payment_clause = clause_by_label.get("付款条件")
+        acceptance_clause = clause_by_label.get("验收标准")
+        if payment_clause and acceptance_clause:
+            payment_text = payment_clause.rawText
+            acceptance_linked = "验收" in payment_text or "验收合格" in payment_text
+            add_focus(
+                title="付款条件与验收闭环核验",
+                risk_level="pending_verification",
+                reason=(
+                    "合同已识别付款条件和验收标准，但需进一步核验付款节点是否与验收完成形成严格闭环。"
+                    if acceptance_linked
+                    else "付款条款与验收条款同时存在，但付款节点未完全体现验收前置约束，建议重点复核。"
+                ),
+                clause_ids=[payment_clause.id, acceptance_clause.id],
+                depends_on=["付款条件", "验收标准"],
+                future_tools=["规则引擎", "付款系统", "验收单据"],
+                confidence=0.82 if acceptance_linked else 0.78,
+                location_text=f"第{payment_clause.page}页 / 第{acceptance_clause.page}页",
+                human_review_suggestion="建议核对付款申请、验收单和节点条件是否一致。",
+            )
+
+        account_clause = clause_by_label.get("账户信息")
+        if account_clause:
+            add_focus(
+                title="收款账户真实性核验",
+                risk_level="pending_verification",
+                reason="合同中存在明确收款账户信息，建议与供应商主数据、历史付款账户及开户信息做一致性核验。",
+                clause_ids=[account_clause.id],
+                depends_on=["账户信息"],
+                future_tools=["供应商主数据", "银行账户核验", "付款系统"],
+                confidence=0.84,
+                location_text=f"第{account_clause.page}页",
+                human_review_suggestion="建议核对开户行、账户名称、账号与付款系统留档是否一致。",
+            )
+
+        breach_clause = clause_by_label.get("违约责任")
+        if breach_clause:
+            add_focus(
+                title="违约责任条款合理性核验",
+                risk_level="medium",
+                reason="已识别违约责任与赔偿表述，建议结合业务类型核验违约金比例、触发条件和责任边界是否合理。",
+                clause_ids=[breach_clause.id],
+                depends_on=["违约责任"],
+                future_tools=["规则引擎", "法务条款库"],
+                confidence=0.8,
+                location_text=f"第{breach_clause.page}页",
+                human_review_suggestion="建议法务或审计复核违约比例和责任触发条件。",
+            )
+
+        party_clause = clause_by_label.get("甲乙方信息")
+        if party_clause:
+            add_focus(
+                title="合同主体与联系人一致性核验",
+                risk_level="pending_verification",
+                reason="合同主体、法定代表人和项目联系人已识别，建议与内部主数据、印章信息及审批资料交叉核验。",
+                clause_ids=[party_clause.id],
+                depends_on=["甲乙方信息", "项目联系人"],
+                future_tools=["内部主数据", "合同系统", "审批流系统"],
+                confidence=0.8,
+                location_text=f"第{party_clause.page}页",
+                human_review_suggestion="建议核对签约主体、联系人和审批留痕是否一致。",
+            )
+
+        attachment_clause = clause_by_label.get("附件条款")
+        if attachment_clause:
+            attachment_text = attachment_clause.rawText
+            attachment_missing = "无" in attachment_text or ".*" in attachment_text
+            add_focus(
+                title="附件与技术文件完整性核验",
+                risk_level="medium" if attachment_missing else "pending_verification",
+                reason=(
+                    "合同已列出技术文件/附件条款，但内容存在“无”或空缺标识，建议核验是否仍有应归档附件未纳入合同。"
+                    if attachment_missing
+                    else "合同存在附件或技术文件条款，建议核验附件清单、版本及签章页是否完整。"
+                ),
+                clause_ids=[attachment_clause.id],
+                depends_on=["附件条款"],
+                future_tools=["合同系统", "档案系统"],
+                confidence=0.76,
+                location_text=f"第{attachment_clause.page}页",
+                human_review_suggestion="建议核对附件清单、技术文件版本和签章完整性。",
+            )
+
+        has_relation_focus = any(
+            name in relation_names
+            for name in ("疑似内部关联交易", "合同-供应商关系", "供应商-股东关系", "供应商-实际控制人关系")
+        )
+        if has_relation_focus and party_clause and ("甲方" in fact_labels or "乙方" in fact_labels):
+            supporting_clause_ids = [party_clause.id]
+            if account_clause:
+                supporting_clause_ids.append(account_clause.id)
+            add_focus(
+                title="供应商关系与关联性核验",
+                risk_level="pending_verification",
+                reason="合同已识别签约主体和收款账户信息，但供应商关联关系仍需结合工商、股权和主数据进一步核验。",
+                clause_ids=supporting_clause_ids,
+                depends_on=["甲乙方信息", "账户信息", "供应商关系"],
+                future_tools=["企业工商数据", "知识图谱", "供应商主数据"],
+                confidence=0.74,
+                location_text=f"第{party_clause.page}页",
+                human_review_suggestion="建议结合供应商主数据和企业关系图谱复核是否存在疑似关联关系。",
+            )
+
+        service_clause = clause_by_label.get("服务/采购/工程内容")
+        term_clause = clause_by_label.get("履约期限")
+        if service_clause and term_clause:
+            add_focus(
+                title="履约范围与交付周期匹配核验",
+                risk_level="pending_verification",
+                reason="服务内容和履约期限均已识别，建议核验工作范围、交付周期和资源安排是否匹配。",
+                clause_ids=[service_clause.id, term_clause.id],
+                depends_on=["服务内容", "履约期限"],
+                future_tools=["项目计划", "合同系统"],
+                confidence=0.75,
+                location_text=f"第{service_clause.page}页 / 第{term_clause.page}页",
+                human_review_suggestion="建议结合项目计划和交付清单复核工期合理性。",
+            )
+
+        return focuses
+
+    @staticmethod
+    def _derived_focuses_are_sufficient(items: list[AuditFocus]) -> bool:
+        if len(items) < 5:
+            return False
+        titles = {item.title for item in items}
+        return len(titles) >= 5
 
     @staticmethod
     def _dedupe_audit_focuses(items: list[AuditFocus]) -> list[AuditFocus]:
