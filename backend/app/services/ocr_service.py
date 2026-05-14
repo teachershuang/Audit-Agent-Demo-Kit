@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from statistics import mean
+import shutil
 from typing import Callable
 
 import fitz
@@ -59,26 +62,35 @@ class OCRService:
         task_dir.mkdir(parents=True, exist_ok=True)
         page_dir = task_dir / "pages"
         page_dir.mkdir(parents=True, exist_ok=True)
+        cache_entry_dir = self._resolve_cache_dir(preparation=preparation, output_root=output_root)
+        cached_document = self._load_cached_document(task_id=task_id, cache_entry_dir=cache_entry_dir, page_dir=page_dir)
+        if cached_document is not None:
+            self._emit_progress(progress_callback, 20, "ocr_cache_hit", "Loaded OCR result from cache.")
+            return cached_document
 
         if preparation.use_builtin_example:
             self._emit_progress(progress_callback, 16, "document_prepared", "Example contract is ready.")
             return self._build_example_document(task_id=task_id, image_path=page_dir / "page_001.png")
 
         if preparation.file_type == "pdf" and preparation.source_path:
-            return await self._extract_pdf(
+            extracted = await self._extract_pdf(
                 task_id=task_id,
                 file_path=preparation.source_path,
                 page_dir=page_dir,
                 progress_callback=progress_callback,
             )
+            self._persist_cache(cache_entry_dir=cache_entry_dir, extracted=extracted, page_dir=page_dir)
+            return extracted
 
         if preparation.file_type == "image" and preparation.source_path:
-            return await self._extract_image(
+            extracted = await self._extract_image(
                 task_id=task_id,
                 file_path=preparation.source_path,
                 page_dir=page_dir,
                 progress_callback=progress_callback,
             )
+            self._persist_cache(cache_entry_dir=cache_entry_dir, extracted=extracted, page_dir=page_dir)
+            return extracted
 
         raise RuntimeError("Unsupported document type.")
 
@@ -454,7 +466,7 @@ class OCRService:
         avg_score = mean(line.score for line in lines)
         short_ratio = sum(1 for line in lines if len(line.text.strip()) <= 2) / len(lines)
         fragmented_ratio = sum(1 for line in lines if len(line.text.strip()) <= 6) / len(lines)
-        return avg_score < 0.89 or short_ratio > 0.30 or (len(lines) >= 26 and fragmented_ratio > 0.45)
+        return avg_score < 0.87 or short_ratio > 0.40 or (len(lines) >= 30 and fragmented_ratio > 0.58)
 
     @staticmethod
     def _group_lines_by_layout(lines: list[PaddleOCRLine]) -> list[DocumentBlock]:
@@ -701,3 +713,100 @@ class OCRService:
             except Exception:
                 continue
         return ImageFont.load_default()
+
+    def _resolve_cache_dir(self, preparation: DocumentPreparation, output_root: Path) -> Path | None:
+        if not self.settings.ocr_cache_enabled or preparation.use_builtin_example or not preparation.source_path:
+            return None
+        try:
+            digest = self._file_digest(preparation.source_path)
+        except Exception:
+            return None
+        cache_dir = output_root / "_cache" / self.settings.ocr_cache_namespace / digest
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+
+    def _load_cached_document(
+        self,
+        task_id: str,
+        cache_entry_dir: Path | None,
+        page_dir: Path,
+    ) -> ExtractedDocument | None:
+        if cache_entry_dir is None:
+            return None
+        metadata_path = cache_entry_dir / "extracted_document.json"
+        cached_pages_dir = cache_entry_dir / "pages"
+        if not metadata_path.exists() or not cached_pages_dir.exists():
+            return None
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for cached_image in sorted(cached_pages_dir.glob("page_*.png")):
+                shutil.copy2(cached_image, page_dir / cached_image.name)
+            pages: list[ContractPage] = []
+            for raw_page in payload.get("pages", []):
+                page = ContractPage.model_validate(raw_page)
+                page.imageUrl = f"/api/contracts/{task_id}/pages/{page.page}/image"
+                pages.append(page)
+            return ExtractedDocument(
+                pages=pages,
+                full_text=str(payload.get("full_text") or ""),
+                pipeline=str(payload.get("pipeline") or "ocr_cache"),
+                warnings=[str(item) for item in payload.get("warnings", [])],
+            )
+        except Exception as exc:
+            app_logger.warning(
+                json_dumps(
+                    {
+                        "event": "ocr_cache_load_failed",
+                        "cacheDir": str(cache_entry_dir),
+                        "error": str(exc),
+                    }
+                )
+            )
+            return None
+
+    def _persist_cache(
+        self,
+        cache_entry_dir: Path | None,
+        extracted: ExtractedDocument,
+        page_dir: Path,
+    ) -> None:
+        if cache_entry_dir is None:
+            return
+        try:
+            cached_pages_dir = cache_entry_dir / "pages"
+            cached_pages_dir.mkdir(parents=True, exist_ok=True)
+            for image_path in sorted(page_dir.glob("page_*.png")):
+                target_path = cached_pages_dir / image_path.name
+                if not target_path.exists():
+                    shutil.copy2(image_path, target_path)
+            payload = {
+                "pages": [page.model_dump() for page in extracted.pages],
+                "full_text": extracted.full_text,
+                "pipeline": extracted.pipeline,
+                "warnings": extracted.warnings,
+            }
+            (cache_entry_dir / "extracted_document.json").write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            app_logger.warning(
+                json_dumps(
+                    {
+                        "event": "ocr_cache_persist_failed",
+                        "cacheDir": str(cache_entry_dir),
+                        "error": str(exc),
+                    }
+                )
+            )
+
+    @staticmethod
+    def _file_digest(file_path: Path) -> str:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()

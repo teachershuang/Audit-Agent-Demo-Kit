@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,8 @@ from app.config import Settings
 class QwenService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.cache_dir = Path(__file__).resolve().parents[2] / settings.storage_dir / "_cache" / settings.qwen_cache_namespace
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def is_available(self) -> bool:
@@ -92,6 +95,10 @@ class QwenService:
         return repaired
 
     async def _post_chat(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+        cache_path = self._cache_path(payload)
+        if self.settings.qwen_cache_enabled and cache_path.exists():
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+
         headers = {
             "Authorization": f"Bearer {self.settings.qwen_api_key}",
             "Content-Type": "application/json",
@@ -109,7 +116,16 @@ class QwenService:
             raise RuntimeError(f"Qwen request timed out after {timeout} seconds.") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Qwen request failed: {exc}") from exc
-        return response.json()
+        data = response.json()
+        if self.settings.qwen_cache_enabled:
+            cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return data
+
+    def _cache_path(self, payload: dict[str, Any]) -> Path:
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return self.cache_dir / f"{digest}.json"
 
     @staticmethod
     def _validate_schema(instance: dict[str, Any], schema: dict[str, Any], label: str) -> None:

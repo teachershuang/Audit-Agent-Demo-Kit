@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"
     qwen_vision_model_name: str = "qwen-vl-plus"
+    qwen_cache_enabled: bool = True
+    qwen_cache_namespace: str = "qwen_v1"
     enable_paddle_ocr: bool = True
     enable_vl_ocr_enhancement: bool = True
     paddle_python_executable: str = "C:/Users/26423/.conda/envs/paddle_test/python.exe"
@@ -34,6 +36,8 @@ class Settings(BaseSettings):
     key_fact_batch_size: int = 6
 
     storage_dir: str = "uploads"
+    ocr_cache_enabled: bool = True
+    ocr_cache_namespace: str = "ocr_v2"
 
     model_config = SettingsConfigDict(
         env_file=str(ROOT_ENV_FILE),
