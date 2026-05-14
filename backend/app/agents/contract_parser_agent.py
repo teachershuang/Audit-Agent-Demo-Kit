@@ -39,6 +39,30 @@ class ContractParserAgent:
         self.clause_batch_size = max(2, settings.clause_batch_size)
         self.key_fact_batch_size = max(3, settings.key_fact_batch_size)
 
+    def derive_section_hints(self, pages: list[ContractPage]) -> list[ContractSection]:
+        hints: list[ContractSection] = []
+        seen_titles: set[str] = set()
+        for page in pages:
+            for block in page.blocks[:12]:
+                title = self._clean(block.text)
+                if not title or title in seen_titles or not self._is_likely_heading(title):
+                    continue
+                seen_titles.add(title)
+                hints.append(
+                    ContractSection(
+                        id=f"hint_{len(hints) + 1:03d}",
+                        title=title[:60],
+                        level=1,
+                        page=page.page,
+                        summary=title[:120],
+                        confidence=0.6,
+                        evidenceId=None,
+                    )
+                )
+                if len(hints) >= 24:
+                    return hints
+        return hints
+
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
         if len(pages) <= max(self.section_batch_size * 3, 12):
             raw_sections = await self._request_sections(pages)
@@ -592,3 +616,26 @@ class ContractParserAgent:
         for index, fact in enumerate(deduped, start=1):
             fact.id = f"fact_{index:03d}"
         return deduped
+
+    @staticmethod
+    def _is_likely_heading(text: str) -> bool:
+        compact = text.replace(" ", "").strip()
+        if not compact:
+            return False
+        if len(compact) <= 28 and re.match(r"^[一二三四五六七八九十]+[、.．]", compact):
+            return True
+        if len(compact) <= 32 and re.match(r"^第[一二三四五六七八九十0-9]+[章节条款部分]", compact):
+            return True
+        heading_keywords = (
+            "合同",
+            "条款",
+            "付款",
+            "验收",
+            "争议",
+            "责任",
+            "金额",
+            "保密",
+            "附件",
+            "期限",
+        )
+        return len(compact) <= 24 and any(keyword in compact for keyword in heading_keywords)

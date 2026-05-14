@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -100,8 +101,45 @@ class ContractAgent:
             )
         )
 
-        sections = await self.parser_agent.reconstruct_sections(extracted.pages)
-        self._emit_progress(progress_callback, 68, "section_reconstruction", f"Identified {len(sections)} sections.")
+        section_hints = self.parser_agent.derive_section_hints(extracted.pages)
+        self._emit_progress(
+            progress_callback,
+            62,
+            "structure_and_clause_analysis",
+            "Reconstructing sections and identifying clauses in parallel.",
+        )
+        section_task = asyncio.create_task(self.parser_agent.reconstruct_sections(extracted.pages))
+        clause_task = asyncio.create_task(self.parser_agent.identify_clauses(extracted.pages, section_hints))
+        sections = []
+        clauses = []
+        pending = {section_task, clause_task}
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for completed in done:
+                if completed is section_task:
+                    sections = completed.result()
+                    if pending:
+                        self._emit_progress(
+                            progress_callback,
+                            70,
+                            "section_reconstruction",
+                            f"Identified {len(sections)} sections. Clause tagging is still running.",
+                        )
+                elif completed is clause_task:
+                    clauses = completed.result()
+                    if pending:
+                        self._emit_progress(
+                            progress_callback,
+                            72,
+                            "clause_tagging",
+                            f"Identified {len(clauses)} key clauses. Section reconstruction is still running.",
+                        )
+        self._emit_progress(
+            progress_callback,
+            78,
+            "clause_tagging",
+            f"Identified {len(sections)} sections and {len(clauses)} key clauses.",
+        )
         agent_steps.append(
             self._step(
                 "step_004",
@@ -114,8 +152,6 @@ class ContractAgent:
             )
         )
 
-        clauses = await self.parser_agent.identify_clauses(extracted.pages, sections)
-        self._emit_progress(progress_callback, 78, "clause_tagging", f"Identified {len(clauses)} key clauses.")
         agent_steps.append(
             self._step(
                 "step_005",
