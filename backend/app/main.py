@@ -22,6 +22,7 @@ from app.services.confidence_service import ConfidenceService
 from app.services.document_service import DocumentService
 from app.services.evidence_service import EvidenceService
 from app.services.ocr_service import OCRService
+from app.services.paddle_ocr_service import PaddleOCRService
 from app.services.qwen_service import QwenService
 from app.services.relation_config_service import RelationConfigService
 from app.storage.local_store import LocalStore
@@ -31,7 +32,15 @@ store = LocalStore(base_dir=Path(__file__).resolve().parents[1] / settings.stora
 
 qwen_service = QwenService(settings)
 document_service = DocumentService()
-ocr_service = OCRService(qwen_service=qwen_service)
+paddle_ocr_service = PaddleOCRService(
+    python_executable=settings.paddle_python_executable,
+    timeout_seconds=settings.paddle_ocr_timeout_seconds,
+)
+ocr_service = OCRService(
+    settings=settings,
+    qwen_service=qwen_service,
+    paddle_ocr_service=paddle_ocr_service,
+)
 evidence_service = EvidenceService()
 confidence_service = ConfidenceService()
 planner = Planner()

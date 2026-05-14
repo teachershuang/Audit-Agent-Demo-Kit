@@ -20,7 +20,13 @@ class QwenService:
     def is_available(self) -> bool:
         return bool(self.settings.qwen_api_key)
 
-    async def chat_json(self, system_prompt: str, user_prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    async def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict[str, Any],
+        timeout: int = 60,
+    ) -> dict[str, Any]:
         if not self.is_available:
             raise RuntimeError("Qwen API key is not configured.")
 
@@ -29,18 +35,18 @@ class QwenService:
             "messages": [
                 {
                     "role": "system",
-                    "content": f"{system_prompt}\n必须仅返回合法 JSON 对象。",
+                    "content": f"{system_prompt}\nReturn only one valid JSON object.",
                 },
                 {
                     "role": "user",
-                    "content": f"{user_prompt}\n请只输出 JSON。",
+                    "content": f"{user_prompt}\nOutput JSON only.",
                 },
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
         }
 
-        data = await self._post_chat(payload=payload, timeout=60)
+        data = await self._post_chat(payload=payload, timeout=timeout)
         content = data["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
@@ -65,7 +71,7 @@ class QwenService:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"{prompt}\n请只输出 JSON。"},
+                        {"type": "text", "text": f"{prompt}\nOutput JSON only."},
                         {
                             "type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{image_base64}"},
@@ -91,7 +97,7 @@ class QwenService:
             "Content-Type": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.settings.qwen_base_url.rstrip('/')}/chat/completions",
                     headers=headers,
@@ -112,7 +118,8 @@ class QwenService:
         except ValidationError as exc:
             raise RuntimeError(f"{label} schema validation failed: {exc.message}") from exc
 
-    def _repair_json(self, raw_text: str) -> dict[str, Any]:
+    @staticmethod
+    def _repair_json(raw_text: str) -> dict[str, Any]:
         candidate = raw_text.strip()
         if candidate.startswith("```"):
             candidate = re.sub(r"^```(?:json)?", "", candidate).strip()

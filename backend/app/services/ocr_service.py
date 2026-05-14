@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import math
 from pathlib import Path
-from time import perf_counter
+from statistics import mean
 from typing import Callable
 
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
+from app.config import Settings
 from app.data.sample_contract import SAMPLE_CONTRACT_TEXT
 from app.logging_utils import app_logger, json_dumps
 from app.schemas.contract import ContractPage, DocumentBlock
 from app.services.document_service import DocumentPreparation
+from app.services.paddle_ocr_service import PaddleOCRLine, PaddleOCRService
 from app.services.qwen_service import QwenService
 
 ProgressCallback = Callable[[int, str, str], None]
@@ -36,9 +37,16 @@ class OCRCandidate:
 
 
 class OCRService:
-    def __init__(self, qwen_service: QwenService, max_ocr_concurrency: int = 2) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        qwen_service: QwenService,
+        paddle_ocr_service: PaddleOCRService,
+    ) -> None:
+        self.settings = settings
         self.qwen_service = qwen_service
-        self.max_ocr_concurrency = max_ocr_concurrency
+        self.paddle_ocr_service = paddle_ocr_service
+        self.max_vl_concurrency = max(1, settings.scanned_vl_concurrency)
 
     async def extract_document(
         self,
@@ -99,11 +107,21 @@ class OCRService:
                 page_number = page_index + 1
                 image_path, scale = self._render_pdf_page(page, page_dir / f"page_{page_number:03d}.png")
                 width, height = self._image_size(image_path)
-                blocks = self._extract_pdf_text_blocks(page=page, scale=scale)
-                text_len = sum(len(block.text.strip()) for block in blocks)
+                pdf_blocks = self._extract_pdf_text_blocks(page=page, scale=scale)
+                text_len = sum(len(block.text.strip()) for block in pdf_blocks)
                 if text_len >= 60:
                     pipelines.add("pdf_text")
+                    blocks = pdf_blocks
                 else:
+                    blocks = []
+                    ocr_candidates.append(
+                        OCRCandidate(
+                            page_number=page_number,
+                            image_path=image_path,
+                            width=width,
+                            height=height,
+                        )
+                    )
                     app_logger.info(
                         json_dumps(
                             {
@@ -118,14 +136,6 @@ class OCRService:
                             }
                         )
                     )
-                    ocr_candidates.append(
-                        OCRCandidate(
-                            page_number=page_number,
-                            image_path=image_path,
-                            width=width,
-                            height=height,
-                        )
-                    )
 
                 page_map[page_number] = ContractPage(
                     page=page_number,
@@ -138,16 +148,14 @@ class OCRService:
                 )
 
         if ocr_candidates:
-            pipelines.add("qwen_vl_text_ocr")
-            self._emit_progress(
-                progress_callback,
-                18,
-                "ocr_started",
-                f"Starting OCR for {len(ocr_candidates)} scanned pages with concurrency {self.max_ocr_concurrency}.",
+            scanned_warnings, scanned_pipelines = await self._extract_scanned_candidates(
+                page_map=page_map,
+                ocr_candidates=ocr_candidates,
+                page_dir=page_dir,
+                progress_callback=progress_callback,
             )
-            warnings.extend(
-                await self._resolve_ocr_candidates(page_map, ocr_candidates, page_dir, progress_callback)
-            )
+            warnings.extend(scanned_warnings)
+            pipelines.update(scanned_pipelines)
 
         pages = [page_map[page_number] for page_number in sorted(page_map)]
         full_text = "\n\n".join("\n".join(block.text for block in page.blocks) for page in pages)
@@ -171,136 +179,337 @@ class OCRService:
         image_path = page_dir / "page_001.png"
         image.save(image_path)
         width, height = image.size
-        self._emit_progress(progress_callback, 14, "ocr_started", "Starting OCR for uploaded image.")
-        blocks = await self._ocr_image_with_retries(
-            page_number=1,
-            image_path=image_path,
-            width=width,
-            height=height,
-            ocr_output_path=page_dir / "page_001_ocr.png",
-        )
         page = ContractPage(
             page=1,
-            title=self._derive_page_title(blocks, fallback="Page 1"),
+            title="Page 1",
             width=width,
             height=height,
             imageUrl=f"/api/contracts/{task_id}/pages/1/image",
-            blocks=blocks,
+            blocks=[],
             evidences=[],
         )
+
+        warnings: list[str] = []
+        pipelines: set[str] = set()
+        candidate = OCRCandidate(page_number=1, image_path=image_path, width=width, height=height)
+        page_warnings, page_pipeline, blocks = await self._build_scanned_page_blocks(candidate, page_dir)
+        warnings.extend(page_warnings)
+        pipelines.update(page_pipeline)
+        page.blocks = blocks
+        page.title = self._derive_page_title(blocks, fallback="Page 1")
         self._emit_progress(progress_callback, 58, "document_extracted", "Image OCR finished.")
         return ExtractedDocument(
             pages=[page],
             full_text="\n".join(block.text for block in blocks),
-            pipeline="qwen_vl_text_ocr",
-            warnings=[],
+            pipeline="+".join(sorted(pipelines)) if pipelines else "scanned_unknown",
+            warnings=warnings,
         )
 
-    async def _resolve_ocr_candidates(
+    async def _extract_scanned_candidates(
         self,
         page_map: dict[int, ContractPage],
         ocr_candidates: list[OCRCandidate],
         page_dir: Path,
         progress_callback: ProgressCallback | None,
-    ) -> list[str]:
-        semaphore = asyncio.Semaphore(self.max_ocr_concurrency)
+    ) -> tuple[list[str], set[str]]:
+        warnings: list[str] = []
+        pipelines: set[str] = set()
+
+        paddle_results: dict[int, list[PaddleOCRLine]] = {}
+        if self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
+            self._emit_progress(
+                progress_callback,
+                18,
+                "paddle_ocr",
+                f"Running PaddleOCR in paddle_test for {len(ocr_candidates)} scanned pages.",
+            )
+            paddle_results = await self.paddle_ocr_service.extract_pages(
+                [
+                    {"page": candidate.page_number, "image_path": str(candidate.image_path)}
+                    for candidate in ocr_candidates
+                ]
+            )
+            if paddle_results:
+                pipelines.add("paddle_ocr")
+
+        semaphore = asyncio.Semaphore(self.max_vl_concurrency)
         progress_lock = asyncio.Lock()
         completed_pages = 0
         total_pages = len(ocr_candidates)
-        warnings: list[str] = []
 
         async def process_candidate(candidate: OCRCandidate) -> None:
             nonlocal completed_pages
+            page = page_map[candidate.page_number]
             async with semaphore:
-                started = perf_counter()
-                page = page_map[candidate.page_number]
-                warning_message: str | None = None
-                try:
-                    blocks = await self._ocr_image_with_retries(
-                        page_number=candidate.page_number,
-                        image_path=candidate.image_path,
-                        width=candidate.width,
-                        height=candidate.height,
-                        ocr_output_path=page_dir / f"page_{candidate.page_number:03d}_ocr.png",
-                    )
-                    page.blocks = blocks
-                    page.title = self._derive_page_title(blocks, fallback=page.title)
-                except Exception as exc:
-                    page.blocks = []
-                    warning_message = f"Page {candidate.page_number} OCR needs manual review: {exc}"
-                    warnings.append(warning_message)
-                duration_ms = int((perf_counter() - started) * 1000)
+                page_warnings, page_pipeline, blocks = await self._build_scanned_page_blocks(
+                    candidate=candidate,
+                    page_dir=page_dir,
+                    paddle_lines=paddle_results.get(candidate.page_number, []),
+                )
+            page.blocks = blocks
+            page.title = self._derive_page_title(blocks, fallback=page.title)
+            warnings.extend(page_warnings)
+            pipelines.update(page_pipeline)
 
             async with progress_lock:
                 completed_pages += 1
                 progress_value = 18 + int((completed_pages / max(total_pages, 1)) * 34)
-                self._emit_progress(
-                    progress_callback,
-                    progress_value,
-                    "ocr_running",
-                    (
-                        f"OCR completed for page {candidate.page_number}/{page_map.__len__()} in {round(duration_ms / 1000, 1)}s. "
-                        f"Finished {completed_pages}/{total_pages} scanned pages."
-                        if warning_message is None
-                        else f"{warning_message}. Finished {completed_pages}/{total_pages} scanned pages."
-                    ),
+                message = (
+                    f"Completed scanned page {candidate.page_number}/{len(page_map)}. "
+                    f"Finished {completed_pages}/{total_pages} scanned pages."
+                    if not page_warnings
+                    else f"{page_warnings[0]}. Finished {completed_pages}/{total_pages} scanned pages."
                 )
+                self._emit_progress(progress_callback, progress_value, "ocr_running", message)
 
         await asyncio.gather(*(process_candidate(candidate) for candidate in ocr_candidates))
-        return warnings
+        return warnings, pipelines
 
-    async def _ocr_image_with_retries(
+    async def _build_scanned_page_blocks(
         self,
-        page_number: int,
-        image_path: Path,
-        width: int,
-        height: int,
-        ocr_output_path: Path,
-    ) -> list[DocumentBlock]:
-        attempts = [(640, 180), (480, 240)]
-        last_error: Exception | None = None
-        for attempt_index, (max_width, timeout_seconds) in enumerate(attempts, start=1):
-            try:
-                prepared_image = self._prepare_ocr_image(
-                    source_path=image_path,
-                    output_path=ocr_output_path,
-                    max_width=max_width,
-                )
-                blocks = await self._ocr_image_blocks(
-                    image_path=prepared_image,
-                    width=width,
-                    height=height,
-                    timeout_seconds=timeout_seconds,
-                )
-                app_logger.info(
-                    json_dumps(
-                        {
-                            "event": "ocr_page_attempt_succeeded",
-                            "page": page_number,
-                            "attempt": attempt_index,
-                            "ocrWidthCap": max_width,
-                            "timeoutSeconds": timeout_seconds,
-                            "blockCount": len(blocks),
-                        }
-                    )
-                )
-                return blocks
-            except Exception as exc:
-                last_error = exc
-                app_logger.warning(
-                    json_dumps(
-                        {
-                            "event": "ocr_page_attempt_failed",
-                            "page": page_number,
-                            "attempt": attempt_index,
-                            "ocrWidthCap": max_width,
-                            "timeoutSeconds": timeout_seconds,
-                            "error": str(exc),
-                        }
-                    )
-                )
+        candidate: OCRCandidate,
+        page_dir: Path,
+        paddle_lines: list[PaddleOCRLine] | None = None,
+    ) -> tuple[list[str], set[str], list[DocumentBlock]]:
+        warnings: list[str] = []
+        pipelines: set[str] = set()
+        lines = paddle_lines
+        if lines is None and self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
+            extracted = await self.paddle_ocr_service.extract_pages(
+                [{"page": candidate.page_number, "image_path": str(candidate.image_path)}]
+            )
+            lines = extracted.get(candidate.page_number, [])
+        lines = lines or []
 
-        raise RuntimeError(f"OCR failed on page {page_number}: {last_error}") from last_error
+        if lines:
+            pipelines.add("paddle_ocr")
+            blocks = self._group_lines_by_layout(lines)
+            if self._should_use_vl_enhancement(lines):
+                vl_paragraphs = await self._try_fetch_vl_paragraphs(
+                    candidate=candidate,
+                    page_dir=page_dir,
+                )
+                if vl_paragraphs:
+                    pipelines.add("qwen_vl_enhance")
+                    semantic_blocks = await self._try_align_paragraphs_to_lines(lines, vl_paragraphs)
+                    if semantic_blocks:
+                        pipelines.add("qwen_text_anchor")
+                        blocks = semantic_blocks
+            return warnings, pipelines, blocks
+
+        vl_blocks = await self._try_build_vl_only_blocks(candidate=candidate, page_dir=page_dir)
+        if vl_blocks:
+            pipelines.add("qwen_vl_only")
+            warnings.append(f"Page {candidate.page_number} used VL-only OCR fallback")
+            return warnings, pipelines, vl_blocks
+
+        warnings.append(f"Page {candidate.page_number} OCR needs manual review: no text extracted")
+        return warnings, pipelines, []
+
+    async def _try_fetch_vl_paragraphs(
+        self,
+        candidate: OCRCandidate,
+        page_dir: Path,
+    ) -> list[str]:
+        if not self.settings.enable_vl_ocr_enhancement or not self.qwen_service.is_available:
+            return []
+
+        try:
+            reduced_path = self._prepare_ocr_image(
+                source_path=candidate.image_path,
+                output_path=page_dir / f"page_{candidate.page_number:03d}_vl.png",
+                max_width=960,
+            )
+            payload = await self.qwen_service.vision_json(
+                prompt=(
+                    "You are reading a scanned Chinese contract page. Return JSON with `full_text` and `paragraphs`. "
+                    "`paragraphs` must be an ordered array of paragraph strings based only on visible text."
+                ),
+                image_path=reduced_path,
+                schema={"type": "object"},
+                timeout=90,
+            )
+            return self._normalize_ocr_paragraphs(payload)
+        except Exception as exc:
+            app_logger.warning(
+                json_dumps(
+                    {
+                        "event": "vl_ocr_enhancement_failed",
+                        "page": candidate.page_number,
+                        "error": str(exc),
+                    }
+                )
+            )
+            return []
+
+    async def _try_align_paragraphs_to_lines(
+        self,
+        lines: list[PaddleOCRLine],
+        paragraphs: list[str],
+    ) -> list[DocumentBlock]:
+        if not paragraphs or not self.qwen_service.is_available:
+            return []
+
+        line_payload = [{"id": line.id, "text": line.text} for line in lines[:120]]
+        paragraph_payload = paragraphs[:40]
+        try:
+            payload = await self.qwen_service.chat_json(
+                system_prompt=(
+                    "You map semantic paragraphs to ordered OCR lines. "
+                    "Each paragraph must map only to contiguous line ids from the provided OCR lines. "
+                    "Do not invent text or line ids."
+                ),
+                user_prompt=(
+                    f"OCR lines: {line_payload}\n"
+                    f"Semantic paragraphs: {paragraph_payload}\n"
+                    "Return JSON with `groups`, each item containing `paragraph` and `lineIds`."
+                ),
+                schema={"type": "object"},
+            )
+        except Exception as exc:
+            app_logger.warning(json_dumps({"event": "text_anchor_alignment_failed", "error": str(exc)}))
+            return []
+
+        groups = payload.get("groups")
+        if not isinstance(groups, list):
+            return []
+
+        line_index = {line.id: idx for idx, line in enumerate(lines)}
+        blocks: list[DocumentBlock] = []
+        seen_ids: set[str] = set()
+        for index, group in enumerate(groups, start=1):
+            if not isinstance(group, dict):
+                continue
+            line_ids = [str(item) for item in group.get("lineIds", []) if str(item).strip()]
+            if not line_ids:
+                continue
+            if any(line_id not in line_index for line_id in line_ids):
+                continue
+            ordered_indices = [line_index[line_id] for line_id in line_ids]
+            if ordered_indices != list(range(min(ordered_indices), max(ordered_indices) + 1)):
+                continue
+            selected_lines = [lines[idx] for idx in ordered_indices]
+            block_text = " ".join(line.text for line in selected_lines).strip()
+            blocks.append(self._merge_lines_into_block(selected_lines, f"hybrid_{index:03d}", block_text))
+            seen_ids.update(line_ids)
+
+        if not blocks:
+            return []
+
+        if self._semantic_alignment_looks_unstable(lines, blocks):
+            return []
+
+        for line in lines:
+            if line.id in seen_ids:
+                continue
+            blocks.append(self._merge_lines_into_block([line], f"hybrid_tail_{line.id}", line.text))
+
+        blocks.sort(key=lambda block: (block.y, block.x))
+        return blocks
+
+    async def _try_build_vl_only_blocks(
+        self,
+        candidate: OCRCandidate,
+        page_dir: Path,
+    ) -> list[DocumentBlock]:
+        if not self.qwen_service.is_available:
+            return []
+        try:
+            reduced_path = self._prepare_ocr_image(
+                source_path=candidate.image_path,
+                output_path=page_dir / f"page_{candidate.page_number:03d}_vl_fallback.png",
+                max_width=960,
+            )
+            payload = await self.qwen_service.vision_json(
+                prompt=(
+                    "You are an OCR assistant for Chinese contracts. Read the page in natural reading order and "
+                    "return a JSON object with two fields: `full_text` and `paragraphs`. "
+                    "`paragraphs` must be an ordered array of paragraph strings. "
+                    "Do not invent content that is not visible in the image."
+                ),
+                image_path=reduced_path,
+                schema={"type": "object"},
+                timeout=120,
+            )
+            paragraphs = self._normalize_ocr_paragraphs(payload)
+            if not paragraphs:
+                return []
+            return self._build_flow_blocks(paragraphs=paragraphs, width=candidate.width, height=candidate.height)
+        except Exception as exc:
+            app_logger.warning(
+                json_dumps(
+                    {
+                        "event": "vl_only_fallback_failed",
+                        "page": candidate.page_number,
+                        "error": str(exc),
+                    }
+                )
+            )
+            return []
+
+    @staticmethod
+    def _should_use_vl_enhancement(lines: list[PaddleOCRLine]) -> bool:
+        if not lines:
+            return False
+        avg_score = mean(line.score for line in lines)
+        short_ratio = sum(1 for line in lines if len(line.text.strip()) <= 2) / len(lines)
+        fragmented_ratio = sum(1 for line in lines if len(line.text.strip()) <= 6) / len(lines)
+        return avg_score < 0.89 or short_ratio > 0.30 or (len(lines) >= 26 and fragmented_ratio > 0.45)
+
+    @staticmethod
+    def _group_lines_by_layout(lines: list[PaddleOCRLine]) -> list[DocumentBlock]:
+        if not lines:
+            return []
+        blocks: list[DocumentBlock] = []
+        cluster: list[PaddleOCRLine] = [lines[0]]
+        block_index = 1
+        for current in lines[1:]:
+            prev = cluster[-1]
+            prev_bottom = prev.y + prev.height
+            gap = current.y - prev_bottom
+            similar_indent = abs(current.x - prev.x) < 48
+            if gap <= max(prev.height, current.height) * 1.2 and similar_indent:
+                cluster.append(current)
+                continue
+            blocks.append(OCRService._merge_lines_into_block(cluster, f"paddle_{block_index:03d}"))
+            block_index += 1
+            cluster = [current]
+        if cluster:
+            blocks.append(OCRService._merge_lines_into_block(cluster, f"paddle_{block_index:03d}"))
+        return blocks
+
+    @staticmethod
+    def _merge_lines_into_block(
+        lines: list[PaddleOCRLine],
+        block_id: str,
+        override_text: str | None = None,
+    ) -> DocumentBlock:
+        min_x = min(line.x for line in lines)
+        min_y = min(line.y for line in lines)
+        max_x = max(line.x + line.width for line in lines)
+        max_y = max(line.y + line.height for line in lines)
+        text = override_text or " ".join(line.text for line in lines)
+        return DocumentBlock(
+            id=block_id,
+            text=text.strip(),
+            x=min_x,
+            y=min_y,
+            width=max(1, max_x - min_x),
+            height=max(1, max_y - min_y),
+            emphasis=OCRService._looks_like_heading(text),
+        )
+
+    @staticmethod
+    def _semantic_alignment_looks_unstable(
+        lines: list[PaddleOCRLine],
+        blocks: list[DocumentBlock],
+    ) -> bool:
+        if not blocks:
+            return True
+        average_line_height = mean(max(1, line.height) for line in lines) if lines else 1
+        oversized_blocks = sum(1 for block in blocks if block.height > average_line_height * 4.5)
+        tiny_blocks = sum(1 for block in blocks if len(block.text.strip()) <= 1)
+        return oversized_blocks > max(1, len(blocks) // 4) or tiny_blocks > max(2, len(blocks) // 3)
 
     def _build_example_document(self, task_id: str, image_path: Path) -> ExtractedDocument:
         width, height = 1440, 1960
@@ -359,18 +568,15 @@ class OCRService:
         for block in page_dict.get("blocks", []):
             if block.get("type") != 0:
                 continue
-
             lines: list[str] = []
             for line in block.get("lines", []):
                 span_text = "".join(span.get("text", "") for span in line.get("spans", []))
                 span_text = span_text.strip()
                 if span_text:
                     lines.append(span_text)
-
             text = " ".join(lines).strip()
             if not text:
                 continue
-
             x0, y0, x1, y1 = block.get("bbox", [0, 0, 0, 0])
             blocks.append(
                 DocumentBlock(
@@ -384,45 +590,6 @@ class OCRService:
                 )
             )
             block_index += 1
-        return blocks
-
-    async def _ocr_image_blocks(
-        self,
-        image_path: Path,
-        width: int,
-        height: int,
-        timeout_seconds: int,
-    ) -> list[DocumentBlock]:
-        payload = await self.qwen_service.vision_json(
-            prompt=(
-                "You are an OCR assistant for Chinese contracts. Read the page in natural reading order and "
-                "return a JSON object with two fields: `full_text` and `paragraphs`. "
-                "`paragraphs` must be an ordered array of paragraph strings. "
-                "Do not invent content that is not visible in the image."
-            ),
-            image_path=image_path,
-            schema={"type": "object"},
-            timeout=timeout_seconds,
-        )
-
-        paragraphs = self._normalize_ocr_paragraphs(payload)
-        if not paragraphs:
-            raise RuntimeError("Scanned page OCR returned no readable text.")
-
-        blocks = self._build_flow_blocks(paragraphs=paragraphs, width=width, height=height)
-        app_logger.info(
-            json_dumps(
-                {
-                    "event": "ocr_page_fallback_completed",
-                    "source": "vision_text_ocr",
-                    "imagePath": str(image_path),
-                    "width": width,
-                    "height": height,
-                    "blockCount": len(blocks),
-                    "charCount": sum(len(block.text) for block in blocks),
-                }
-            )
-        )
         return blocks
 
     @staticmethod
@@ -449,22 +616,17 @@ class OCRService:
         horizontal_padding = max(36, int(width * 0.08))
         top_padding = max(36, int(height * 0.05))
         usable_width = max(320, width - horizontal_padding * 2)
-        usable_height = max(300, height - top_padding * 2)
         line_height = max(28, int(height * 0.024))
         gap = max(12, int(line_height * 0.45))
-
-        units = [max(1, math.ceil(len(text) / 28)) for text in usable_paragraphs]
-        total_units = sum(units) + max(0, len(usable_paragraphs) - 1)
-        scale = min(1.45, usable_height / max(line_height * total_units, 1))
 
         current_y = top_padding
         blocks: list[DocumentBlock] = []
         for index, text in enumerate(usable_paragraphs, start=1):
-            unit_count = units[index - 1]
-            block_height = max(line_height, int(line_height * unit_count * scale))
+            unit_count = max(1, len(text) // 28 + 1)
+            block_height = max(line_height, int(line_height * unit_count))
             blocks.append(
                 DocumentBlock(
-                    id=f"ocr_{index:03d}",
+                    id=f"vl_{index:03d}",
                     text=text,
                     x=horizontal_padding,
                     y=min(current_y, max(top_padding, height - block_height - top_padding)),
@@ -474,7 +636,6 @@ class OCRService:
                 )
             )
             current_y += block_height + gap
-
         return blocks
 
     @staticmethod
@@ -511,9 +672,7 @@ class OCRService:
     @staticmethod
     def _looks_like_heading(text: str) -> bool:
         compact = text.strip()
-        if len(compact) <= 24 and compact.startswith(
-            ("一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、")
-        ):
+        if len(compact) <= 24 and compact.startswith(("一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、")):
             return True
         if len(compact) <= 26 and any(token in compact for token in ("合同", "条款", "标准", "金额", "付款")):
             return True

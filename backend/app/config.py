@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"
     qwen_vision_model_name: str = "qwen-vl-plus"
+    enable_paddle_ocr: bool = True
+    enable_vl_ocr_enhancement: bool = True
+    paddle_python_executable: str = "C:/Users/26423/.conda/envs/paddle_test/python.exe"
+    paddle_ocr_timeout_seconds: int = 240
+    scanned_vl_concurrency: int = 1
 
     storage_dir: str = "uploads"
 
