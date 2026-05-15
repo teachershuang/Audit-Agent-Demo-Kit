@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.config import Settings
+from app.prompts.evidence import build_grounding_prompt
 from app.schemas.contract import ClauseTag, ContractAnalysisResult, ContractPage, ContractSection, EvidenceRef, KeyFact
 from app.services.qwen_service import QwenService
 
@@ -166,19 +167,15 @@ class EvidenceService:
         if not page_scope:
             page_scope = pages[: min(3, len(pages))]
         try:
+            prompt = build_grounding_prompt(
+                batch=batch,
+                page_scope=self._grounding_pages_payload(page_scope),
+                top_key=top_key,
+                item_kind=item_kind,
+            )
             payload = await self.qwen_service.chat_json(
-                system_prompt=(
-                    "You are grounding already-identified contract items back to OCR blocks. "
-                    "Do not reinterpret the item type. Only map each candidate to the best supporting blockIds "
-                    "from the provided OCR blocks. You may return multiple non-contiguous blockIds when the evidence "
-                    "crosses pages or is split. Do not invent blockIds."
-                ),
-                user_prompt=(
-                    f"Candidates ({item_kind}):\n{json.dumps(batch, ensure_ascii=False)}\n"
-                    f"OCR page scope:\n{json.dumps(self._grounding_pages_payload(page_scope), ensure_ascii=False)}\n"
-                    f"Return one JSON object with top-level key `{top_key}`. "
-                    f"Each item must include candidateId and blockIds."
-                ),
+                system_prompt=prompt.system,
+                user_prompt=prompt.user,
                 schema={"type": "object"},
                 timeout=120,
             )

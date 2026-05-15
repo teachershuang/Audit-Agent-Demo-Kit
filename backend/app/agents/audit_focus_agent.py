@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
+from app.prompts.audit import build_audit_focus_prompt
+from app.prompts.context import build_relation_prompt_context
 from app.schemas.audit import AuditFocus
 from app.schemas.contract import ClauseTag, ContractSection, KeyFact
 from app.schemas.relation import RelationConfig
@@ -47,7 +48,6 @@ class AuditFocusAgent:
         model_focuses = self._build_focuses_from_items(raw_items, clauses, relations, clause_map)
         if model_focuses:
             return self._dedupe_audit_focuses(model_focuses + self._derive_relation_fallbacks(clauses, relations))
-
         return self._dedupe_audit_focuses(self._derive_relation_fallbacks(clauses, relations))
 
     async def _request_focus_batch(
@@ -70,19 +70,6 @@ class AuditFocusAgent:
             }
             for clause in clauses
         ]
-        relation_payload = [
-            {
-                "id": relation.id,
-                "name": relation.name,
-                "description": relation.description,
-                "enabled": relation.enabled,
-                "riskPrompt": relation.riskPrompt,
-                "toolSource": [tool.value for tool in relation.toolSource],
-                "priority": relation.priority.value,
-            }
-            for relation in relations
-            if relation.enabled
-        ]
         fact_payload = [fact.model_dump() for fact in key_facts[:30]]
         section_payload = [
             {
@@ -93,26 +80,17 @@ class AuditFocusAgent:
             }
             for section in sections[:30]
         ]
+        relation_payload = build_relation_prompt_context(relations)
+        prompt = build_audit_focus_prompt(
+            section_payload=section_payload,
+            clause_payload=clause_payload,
+            fact_payload=fact_payload,
+            relation_payload=relation_payload,
+            focus_hint=focus_hint,
+        )
         return await self.qwen_service.chat_json(
-            system_prompt=(
-                "你是审计风控辅助分析 Agent。"
-                "请基于合同章节、条款、关键信息和用户配置的关系关注项，生成审计关注方向。"
-                "不能输出最终审计结论，只能输出关注方向、疑似风险或待核验事项。"
-                "既要响应用户配置的关系关注项，也可以主动发现新的关注方向。"
-                "对于内部关联交易、供应商关系、账户异常等，必须使用“疑似”“待核验”“建议接入外部数据确认”的措辞。"
-                "所有输出必须是中文。"
-            ),
-            user_prompt=(
-                f"关注主题：{focus_hint}\n"
-                f"章节：\n{json.dumps(section_payload, ensure_ascii=False)}\n"
-                f"条款：\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
-                f"关键信息：\n{json.dumps(fact_payload, ensure_ascii=False)}\n"
-                f"关系配置：\n{json.dumps(relation_payload, ensure_ascii=False)}\n"
-                "请返回 JSON 对象，顶层字段为 `auditFocuses`。"
-                "每个关注项包含：title, focusSource, matchedRelationIds, riskLevel, reason, evidenceClauseIds, locationText, confidence, dependsOn, currentBasis, futureTools, modelOnly, humanReviewSuggestion。"
-                "focusSource 只能是 `relation_config`、`agent_discovered`、`hybrid` 之一。"
-                "matchedRelationIds 只能引用输入中的关系配置 id。"
-            ),
+            system_prompt=prompt.system,
+            user_prompt=prompt.user,
             schema={"type": "object"},
             timeout=120,
         )
@@ -125,7 +103,7 @@ class AuditFocusAgent:
     ) -> list[dict[str, Any]]:
         relation_sensitive = {"甲乙方信息", "账户信息", "合同金额", "付款条件", "其他重要条款"}
         performance_sensitive = {"付款条件", "验收标准", "违约责任", "权利义务", "履约期限", "附件条款"}
-        groups = [
+        return [
             {
                 "focus_hint": "履约、付款、验收、违约、交付闭环",
                 "clauses": [clause for clause in clauses if clause.coreLabel in performance_sensitive] or clauses[:8],
@@ -139,7 +117,6 @@ class AuditFocusAgent:
                 "key_facts": [fact for fact in key_facts if fact.label in {"甲方", "乙方", "甲乙方信息", "账户信息", "合同金额"}],
             },
         ]
-        return groups
 
     def _build_focuses_from_items(
         self,
@@ -231,7 +208,9 @@ class AuditFocusAgent:
                     riskLevel=self._normalize_risk_level("pending_verification"),
                     reason=f"该关注项来自用户配置的关系关注：{relation.description or relation.riskPrompt}",
                     evidenceClauseIds=self._unique_preserve_order(related_clause_ids),
-                    locationText=" / ".join(f"第 {clause_by_core[label].page} 页" for label in depends_on if label in clause_by_core),
+                    locationText=" / ".join(
+                        f"第 {clause_by_core[label].page} 页" for label in depends_on if label in clause_by_core
+                    ),
                     confidence=0.68,
                     dependsOn=depends_on,
                     currentBasis="当前基于合同文本和用户配置关系项生成，建议结合外部数据进一步核验。",
@@ -258,72 +237,45 @@ class AuditFocusAgent:
     @staticmethod
     def _normalize_focus_source(value: Any, matched_relation_ids: list[str]) -> str:
         text = str(value or "").strip().lower()
-        if text == "relation_config":
+        if text in {"relation_config", "user_configured"}:
             return "relation_config"
         if text == "hybrid":
             return "hybrid"
-        if text == "agent_discovered":
-            return "agent_discovered"
-        return "hybrid" if matched_relation_ids else "agent_discovered"
+        if matched_relation_ids:
+            return "hybrid"
+        return "agent_discovered"
 
     @staticmethod
-    def _normalize_risk_level(value: Any):
+    def _normalize_risk_level(value: Any) -> str:
         text = str(value or "").strip().lower()
         if text in {"low", "medium", "high", "pending_verification"}:
             return text
-        if text in {"待核验", "pending", "external_pending"}:
-            return "pending_verification"
-        if text in {"高", "high_risk"}:
-            return "high"
-        if text in {"低"}:
-            return "low"
-        return "medium"
+        aliases = {
+            "待核验": "pending_verification",
+            "待外部数据": "pending_verification",
+            "中": "medium",
+            "高": "high",
+            "低": "low",
+        }
+        return aliases.get(text, "pending_verification")
 
     @staticmethod
-    def _normalize_future_tools(tools: list[str]) -> list[str]:
-        normalized = [tool.strip() for tool in tools if str(tool).strip()]
-        if normalized:
-            return AuditFocusAgent._unique_preserve_order(normalized)
-        return ["知识图谱", "企业工商数据", "内部主数据"]
-
-    @staticmethod
-    def _clamp_confidence(value: Any) -> float:
-        try:
-            score = float(value)
-        except Exception:
-            score = 0.72
-        return max(0.01, min(score, 0.99))
-
-    @staticmethod
-    def _to_list(value: Any) -> list[str]:
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        if isinstance(value, str):
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return []
-
-    @staticmethod
-    def _to_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y", "是"}
-        return bool(value)
-
-    @staticmethod
-    def _clean(value: Any) -> str:
-        return "\n".join(line.strip() for line in str(value or "").replace("\r", "\n").splitlines() if line.strip())
-
-    @staticmethod
-    def _unique_preserve_order(values: list[str]) -> list[str]:
-        seen: set[str] = set()
-        ordered: list[str] = []
+    def _normalize_future_tools(values: list[str]) -> list[str]:
+        mapping = {
+            "model_inference": "模型推理",
+            "knowledge_graph_future": "知识图谱",
+            "enterprise_relation_future": "企业工商数据",
+            "internal_master_data_future": "内部主数据",
+            "rule_engine_future": "规则引擎",
+            "rpa_api_future": "RPA/API 查询",
+        }
+        normalized: list[str] = []
         for value in values:
-            if not value or value in seen:
+            text = str(value).strip()
+            if not text:
                 continue
-            seen.add(value)
-            ordered.append(value)
-        return ordered
+            normalized.append(mapping.get(text, text))
+        return AuditFocusAgent._unique_preserve_order(normalized)
 
     @staticmethod
     def _dedupe_audit_focuses(items: list[AuditFocus]) -> list[AuditFocus]:
@@ -331,13 +283,47 @@ class AuditFocusAgent:
         for item in items:
             key = (item.title, tuple(sorted(item.evidenceClauseIds)))
             current = best_by_key.get(key)
-            if current is None or (item.confidence, len(item.matchedRelationIds)) > (
-                current.confidence,
-                len(current.matchedRelationIds),
-            ):
+            if current is None or item.confidence > current.confidence:
                 best_by_key[key] = item
         deduped = list(best_by_key.values())
-        deduped.sort(key=lambda item: (-item.confidence, item.title))
+        deduped.sort(key=lambda item: (item.riskLevel, -item.confidence, item.title))
         for index, item in enumerate(deduped, start=1):
             item.id = f"audit_{index:03d}"
         return deduped
+
+    @staticmethod
+    def _clean(value: Any) -> str:
+        return str(value or "").strip()
+
+    @staticmethod
+    def _clamp_confidence(value: Any) -> float:
+        try:
+            score = float(value)
+        except Exception:
+            score = 0.66
+        return max(0.01, min(score, 0.99))
+
+    @staticmethod
+    def _to_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+    @staticmethod
+    def _to_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @staticmethod
+    def _unique_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            ordered.append(item)
+        return ordered

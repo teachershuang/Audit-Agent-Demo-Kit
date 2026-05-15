@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from app.prompts.verification import build_verification_narrative_prompt
 from app.schemas.audit import AuditFocus, VerificationItem, VerificationStatus
 from app.schemas.contract import ClauseTag, ContractSection
 from app.services.qwen_service import QwenService
@@ -28,7 +28,6 @@ class VerificationAgent:
         items = self._build_rule_items(sections=sections, clauses=clauses, audit_focuses=audit_focuses)
         if not items or not self.qwen_service.is_available:
             return items
-
         try:
             narratives = await self._request_verification_narratives(items=items, clauses=clauses, audit_focuses=audit_focuses)
         except Exception:
@@ -157,20 +156,10 @@ class VerificationAgent:
             for audit in audit_focuses[:24]
         ]
         verify_payload = [item.model_dump() for item in items]
+        prompt = build_verification_narrative_prompt(clause_payload, audit_payload, verify_payload)
         return await self.qwen_service.chat_json(
-            system_prompt=(
-                "你是合同审计校验说明 Agent。"
-                "请把结构化校验结果改写成用户可读、业务可理解的校验说明。"
-                "不能改变校验结论的状态，只能优化说明文字和人工复核建议。"
-                "输出必须是中文。"
-            ),
-            user_prompt=(
-                f"条款摘要：\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
-                f"关注事项：\n{json.dumps(audit_payload, ensure_ascii=False)}\n"
-                f"校验结构：\n{json.dumps(verify_payload, ensure_ascii=False)}\n"
-                "请返回 JSON 对象，顶层字段为 `verificationItems`。"
-                "每个 verification item 包含：id, description, method。"
-            ),
+            system_prompt=prompt.system,
+            user_prompt=prompt.user,
             schema={"type": "object"},
             timeout=90,
         )

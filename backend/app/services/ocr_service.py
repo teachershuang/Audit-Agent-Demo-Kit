@@ -15,6 +15,12 @@ from PIL import Image, ImageDraw, ImageFont
 from app.config import Settings
 from app.data.sample_contract import SAMPLE_CONTRACT_TEXT
 from app.logging_utils import app_logger, json_dumps
+from app.prompts.ocr import (
+    build_text_anchor_system_prompt,
+    build_text_anchor_user_prompt,
+    build_vl_fallback_prompt,
+    build_vl_ocr_prompt,
+)
 from app.schemas.contract import ContractPage, DocumentBlock
 from app.services.document_service import DocumentPreparation
 from app.services.paddle_ocr_service import PaddleOCRLine, PaddleOCRService
@@ -386,12 +392,7 @@ class OCRService:
                 max_width=960,
             )
             payload = await self.qwen_service.vision_json(
-                prompt=(
-                    "你正在阅读一页中文扫描合同。"
-                    "请只做 OCR 与阅读顺序还原，不要总结，不要解释，不要翻译。"
-                    "返回 JSON，对象包含 `full_text` 和 `paragraphs`。"
-                    "`paragraphs` 必须是按自然阅读顺序排列的段落数组，只能基于图片中可见文字。"
-                ),
+                prompt=build_vl_ocr_prompt(),
                 image_path=reduced_path,
                 schema={"type": "object"},
                 timeout=120,
@@ -422,17 +423,8 @@ class OCRService:
         paragraph_payload = paragraphs[:40]
         try:
             payload = await self.qwen_service.chat_json(
-                system_prompt=(
-                    "你负责把合同语义段落回锚到 OCR 行。"
-                    "每个段落只能映射到输入里真实存在的连续 lineIds。"
-                    "不要编造 lineIds，不要输出英文。"
-                ),
-                user_prompt=(
-                    f"OCR lines: {line_payload}\n"
-                    f"Semantic paragraphs: {paragraph_payload}\n"
-                    "请返回 JSON 对象，顶层字段为 `groups`。"
-                    "每个 group 包含 `paragraph` 和 `lineIds`。"
-                ),
+                system_prompt=build_text_anchor_system_prompt(),
+                user_prompt=build_text_anchor_user_prompt(line_payload, paragraph_payload),
                 schema={"type": "object"},
             )
         except Exception as exc:
@@ -496,12 +488,7 @@ class OCRService:
                 max_width=960,
             )
             payload = await self.qwen_service.vision_json(
-                prompt=(
-                    "You are an OCR assistant for Chinese contracts. Read the page in natural reading order and "
-                    "return a JSON object with two fields: `full_text` and `paragraphs`. "
-                    "`paragraphs` must be an ordered array of paragraph strings. "
-                    "Do not invent content that is not visible in the image."
-                ),
+                prompt=build_vl_fallback_prompt(),
                 image_path=reduced_path,
                 schema={"type": "object"},
                 timeout=120,

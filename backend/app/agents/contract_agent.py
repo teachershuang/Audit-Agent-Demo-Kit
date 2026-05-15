@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -100,32 +101,14 @@ class ContractAgent:
             )
         )
 
-        self._emit_progress(
-            progress_callback,
-            60,
-            "section_reconstruction",
-            "正在根据 OCR blocks 重建合同章节并建立证据对应。",
-        )
+        self._emit_progress(progress_callback, 60, "section_reconstruction", "正在根据 OCR blocks 重建合同章节结构。")
         sections = await self.parser_agent.reconstruct_sections(extracted.pages)
-        self._emit_progress(
-            progress_callback,
-            72,
-            "section_reconstruction",
-            f"已识别 {len(sections)} 个章节，并完成章节级证据定位。",
-        )
-        self._emit_progress(
-            progress_callback,
-            76,
-            "clause_tagging",
-            "正在识别关键条款，并将条款回链到原文证据块。",
-        )
-        clauses = await self.parser_agent.identify_clauses(extracted.pages, sections)
-        self._emit_progress(
-            progress_callback,
-            82,
-            "clause_tagging",
-            f"已识别 {len(clauses)} 条关键条款，并建立条款证据映射。",
-        )
+        self._emit_progress(progress_callback, 72, "section_reconstruction", f"已识别 {len(sections)} 个章节。")
+
+        self._emit_progress(progress_callback, 76, "clause_tagging", "正在识别关键条款。")
+        clauses = await self.parser_agent.identify_clauses(extracted.pages, sections, relations)
+        self._emit_progress(progress_callback, 82, "clause_tagging", f"已识别 {len(clauses)} 条关键条款。")
+
         agent_steps.append(
             self._step(
                 "step_004",
@@ -137,7 +120,6 @@ class ContractAgent:
                 "qwen_service",
             )
         )
-
         agent_steps.append(
             self._step(
                 "step_005",
@@ -164,12 +146,21 @@ class ContractAgent:
             )
         )
 
-        await self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
-        self._emit_progress(progress_callback, 92, "evidence_mapping", "正在把章节、条款和关键信息统一映射回合同原文。")
+        self._emit_progress(progress_callback, 90, "evidence_and_audit", "正在并行执行证据 grounding 和审计关注点生成。")
+        evidence_task = self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
+        audit_task = self.audit_focus_agent.generate(
+            sections=sections,
+            clauses=clauses,
+            relations=relations,
+            key_facts=key_facts,
+        )
+        _, audit_focuses = await asyncio.gather(evidence_task, audit_task)
+        self._emit_progress(progress_callback, 96, "audit_focus_generation", f"已生成 {len(audit_focuses)} 项审计关注方向，并完成证据 grounding。")
+
         agent_steps.append(
             self._step(
                 "step_007",
-                "证据回链",
+                "证据 grounding",
                 AgentStepStatus.SUCCESS,
                 210,
                 "sections / clauses / key facts",
@@ -177,19 +168,11 @@ class ContractAgent:
                 "evidence_service",
             )
         )
-
-        audit_focuses = await self.audit_focus_agent.generate(
-            sections=sections,
-            clauses=clauses,
-            relations=relations,
-            key_facts=key_facts,
-        )
-        self._emit_progress(progress_callback, 96, "audit_focus_generation", f"已生成 {len(audit_focuses)} 项审计关注方向。")
         self._bind_clause_audit_links(clauses, audit_focuses)
         agent_steps.append(
             self._step(
                 "step_008",
-                "审计关注事项生成",
+                "审计关注点生成",
                 AgentStepStatus.SUCCESS,
                 840,
                 f"{len(relations)} relation configs",
@@ -279,5 +262,4 @@ class ContractAgent:
             inputSummary=input_summary,
             outputSummary=output_summary,
             tool=tool,
-            success=status != AgentStepStatus.WARNING,
         )
