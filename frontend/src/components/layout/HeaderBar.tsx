@@ -47,7 +47,7 @@ export function HeaderBar({
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-                合同编号 {contractNumber ?? "待识别"}
+                合同编号 {contractNumber ?? "未提取"}
               </span>
               {task?.fileName ? (
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">

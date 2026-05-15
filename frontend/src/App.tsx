@@ -6,25 +6,16 @@ import { HeaderBar } from "./components/layout/HeaderBar";
 import { ErrorBanner } from "./components/shared/ErrorBanner";
 import { EmptyState } from "./components/shared/EmptyState";
 import { LoadingState } from "./components/shared/LoadingState";
-import type { ClauseTag, KeyFact } from "./types/contract";
+import type { KeyFact } from "./types/contract";
 import { useContractStore } from "./store/contractStore";
 
-function deriveContractNumber(keyFacts: KeyFact[], clauses: ClauseTag[]): string | null {
-  const fact = keyFacts.find((item) => item.label.includes("合同编号") || item.label.includes("协议编号"));
-  if (fact?.value.trim()) {
-    return fact.value.trim();
+function deriveContractNumber(keyFacts: KeyFact[]): string | null {
+  const fact = keyFacts.find((item) => item.label === "合同编号" || item.label === "协议编号");
+  const value = fact?.value.trim();
+  if (!value || value === "未提取" || value === "待提取") {
+    return null;
   }
-
-  const pattern =
-    /(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\-_/()（）]{4,80})/;
-  for (const clause of clauses) {
-    const match = clause.rawText.match(pattern);
-    if (match?.[1]?.trim()) {
-      return match[1].trim();
-    }
-  }
-
-  return null;
+  return value;
 }
 
 function App() {
@@ -69,8 +60,8 @@ function App() {
   }, [activeEntity, activeTab]);
 
   const contractNumber = useMemo(
-    () => deriveContractNumber(result?.keyFacts ?? [], result?.clauses ?? []),
-    [result?.keyFacts, result?.clauses],
+    () => deriveContractNumber(result?.keyFacts ?? []),
+    [result?.keyFacts],
   );
 
   const leftPanel = !result ? (

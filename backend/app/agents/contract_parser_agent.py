@@ -103,8 +103,11 @@ class ContractParserAgent:
         derived_facts = self._dedupe_key_facts(
             self._derive_key_facts_from_pages(pages) + self._derive_key_facts_from_clauses_v2(clauses)
         )
-        if self._derived_facts_are_sufficient_v2(derived_facts):
-            return self._dedupe_key_facts(derived_facts)
+        overview_facts: list[KeyFact] = []
+        try:
+            overview_facts = await self._request_overview_key_facts(pages, clauses)
+        except Exception:
+            overview_facts = []
 
         clause_batches = self._chunk_items(clauses, self.key_fact_batch_size)
         raw_batches = await self._gather_limited(
@@ -131,7 +134,79 @@ class ContractParserAgent:
                         notes=self._clean(item.get("notes") or item.get("note") or item.get("remark")) or None,
                     )
                 )
-        return self._dedupe_key_facts(derived_facts + facts)
+        merged = self._dedupe_key_facts(overview_facts + derived_facts + facts)
+        self._ensure_required_overview_facts(merged)
+        return self._dedupe_key_facts(merged)
+
+    async def _request_overview_key_facts(
+        self,
+        pages: list[ContractPage],
+        clauses: list[ClauseTag],
+    ) -> list[KeyFact]:
+        clause_payload = [
+            {
+                "id": clause.id,
+                "label": clause.label,
+                "coreLabel": clause.coreLabel,
+                "summary": clause.summary[:220],
+                "rawText": clause.rawText[:600],
+                "page": clause.page,
+                "evidenceId": clause.evidenceId,
+            }
+            for clause in clauses[:18]
+        ]
+        page_payload = [
+            {
+                "page": page.page,
+                "text": "\n".join(self._clean(block.text) for block in page.blocks[:28])[:1800],
+            }
+            for page in pages[:4]
+        ]
+
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "你是合同审阅与管理层汇报材料整理专家。"
+                "请从合同原文中提取四个高层总览节点，并生成简洁、专业、适合领导展示的中文摘要。"
+                "不要照抄大段原文，不要输出英文，不要编造。"
+                "如果合同编号无法从原文稳定识别，请明确输出“未提取”，不要猜测。"
+            ),
+            user_prompt=(
+                f"合同首页与前几页原文摘要：\n{json.dumps(page_payload, ensure_ascii=False)}\n"
+                f"关键条款候选：\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
+                "请返回 JSON 对象，顶层字段为 `overviewFacts`。"
+                "必须包含且仅包含四项：合同编号、主体摘要、甲乙方信息、服务内容。"
+                "每项包含：label, value, page, confidence, evidenceText, notes。"
+                "要求：1. 合同编号尽量输出编号本身，而不是合同名称。"
+                "2. 主体摘要控制在 40 字以内。"
+                "3. 甲乙方信息控制在 50 字以内。"
+                "4. 服务内容控制在 45 字以内。"
+            ),
+            schema={"type": "object"},
+            timeout=90,
+        )
+        items = self._pick_first_array(payload, ["overviewFacts", "keyFacts", "facts"])
+        facts: list[KeyFact] = []
+        for index, item in enumerate(items, start=1):
+            label = self._normalize_overview_label(self._clean(item.get("label") or item.get("name")))
+            if label not in {"合同编号", "主体摘要", "甲乙方信息", "服务内容"}:
+                continue
+            value = self._clean(item.get("value") or item.get("content"))
+            if not value:
+                continue
+            evidence_text = self._clean(item.get("evidenceText") or item.get("evidence") or value)
+            page = self._coerce_page(item.get("page"), pages, evidence_text or value)
+            facts.append(
+                KeyFact(
+                    id=f"overview_{index:03d}",
+                    label=label,
+                    value=value,
+                    page=page,
+                    confidence=self._clamp_confidence(item.get("confidence")),
+                    evidenceId=self._clean(item.get("evidenceId")) or self._locate_evidence_id(pages, page, evidence_text),
+                    notes=self._clean(item.get("notes") or item.get("remark")) or None,
+                )
+            )
+        return facts
 
     async def _request_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
         payload = await self.qwen_service.chat_json(
@@ -880,6 +955,43 @@ class ContractParserAgent:
             elif clause_key == "服务/采购/工程内容":
                 add_fact("服务内容", clause.summary or clause.rawText[:160], clause)
         return facts
+
+    @staticmethod
+    def _normalize_overview_label(label: str) -> str:
+        compact = label.strip()
+        if compact in {"合同编号", "协议编号", "编号"}:
+            return "合同编号"
+        if compact in {"主体摘要", "主体信息摘要", "合同主体摘要", "合同基本信息"}:
+            return "主体摘要"
+        if compact in {"甲乙方信息", "合同主体信息", "双方主体信息", "主体信息"}:
+            return "甲乙方信息"
+        if compact in {"服务内容", "项目内容", "服务/采购/工程内容", "合同服务内容"}:
+            return "服务内容"
+        return compact
+
+    @staticmethod
+    def _ensure_required_overview_facts(facts: list[KeyFact]) -> None:
+        required = {
+            "合同编号": "未提取",
+            "主体摘要": "待提取",
+            "甲乙方信息": "待提取",
+            "服务内容": "待提取",
+        }
+        labels = {fact.label for fact in facts}
+        for label, fallback in required.items():
+            if label in labels:
+                continue
+            facts.append(
+                KeyFact(
+                    id=f"fact_placeholder_{len(facts) + 1:03d}",
+                    label=label,
+                    value=fallback,
+                    page=1,
+                    confidence=0.2,
+                    evidenceId=None,
+                    notes="模型未稳定识别到该字段",
+                )
+            )
 
     @staticmethod
     def _derived_facts_are_sufficient_v2(facts: list[KeyFact]) -> bool:
