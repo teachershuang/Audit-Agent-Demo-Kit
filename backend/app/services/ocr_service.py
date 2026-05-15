@@ -50,6 +50,7 @@ class OCRService:
         self.qwen_service = qwen_service
         self.paddle_ocr_service = paddle_ocr_service
         self.max_vl_concurrency = max(1, settings.scanned_vl_concurrency)
+        self.scanned_ocr_strategy = (settings.scanned_ocr_strategy or "vl_primary").strip().lower()
 
     async def extract_document(
         self,
@@ -228,7 +229,12 @@ class OCRService:
         pipelines: set[str] = set()
 
         paddle_results: dict[int, list[PaddleOCRLine]] = {}
-        if self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
+        should_prefetch_paddle = (
+            self.scanned_ocr_strategy == "paddle_primary"
+            and self.settings.enable_paddle_ocr
+            and self.paddle_ocr_service.is_available
+        )
+        if should_prefetch_paddle:
             self._emit_progress(
                 progress_callback,
                 18,
@@ -284,20 +290,50 @@ class OCRService:
     ) -> tuple[list[str], set[str], list[DocumentBlock]]:
         warnings: list[str] = []
         pipelines: set[str] = set()
-        lines = paddle_lines
-        if lines is None and self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
-            extracted = await self.paddle_ocr_service.extract_pages(
-                [{"page": candidate.page_number, "image_path": str(candidate.image_path)}]
-            )
-            lines = extracted.get(candidate.page_number, [])
-        lines = lines or []
-
         vl_paragraphs = await self._try_fetch_vl_paragraphs(
             candidate=candidate,
             page_dir=page_dir,
         )
         if vl_paragraphs:
             pipelines.add("qwen_vl_semantic")
+        lines = paddle_lines or []
+
+        if self.scanned_ocr_strategy == "vl_primary" and vl_paragraphs:
+            if not lines and self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
+                extracted = await self.paddle_ocr_service.extract_pages(
+                    [{"page": candidate.page_number, "image_path": str(candidate.image_path)}]
+                )
+                lines = extracted.get(candidate.page_number, [])
+                if lines:
+                    pipelines.add("paddle_ocr_anchor")
+
+            if lines:
+                semantic_blocks = await self._try_align_paragraphs_to_lines(
+                    lines=lines,
+                    paragraphs=vl_paragraphs,
+                    page_number=candidate.page_number,
+                )
+                if semantic_blocks:
+                    pipelines.add("qwen_text_anchor")
+                    return warnings, pipelines, semantic_blocks
+
+            vl_blocks = self._build_flow_blocks(
+                paragraphs=vl_paragraphs,
+                width=candidate.width,
+                height=candidate.height,
+                page_number=candidate.page_number,
+            )
+            if vl_blocks:
+                pipelines.add("qwen_vl_primary")
+                warnings.append(f"Page {candidate.page_number} used VL-primary OCR with approximate boxes")
+                return warnings, pipelines, vl_blocks
+
+        if not lines and self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
+            extracted = await self.paddle_ocr_service.extract_pages(
+                [{"page": candidate.page_number, "image_path": str(candidate.image_path)}]
+            )
+            lines = extracted.get(candidate.page_number, [])
+        lines = lines or []
 
         if lines:
             pipelines.add("paddle_ocr")

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     qwen_vision_model_name: str = "qwen-vl-plus"
     qwen_cache_enabled: bool = True
     qwen_cache_namespace: str = "qwen_v2_multistage"
+    scanned_ocr_strategy: str = "vl_primary"
     enable_paddle_ocr: bool = True
     enable_vl_ocr_enhancement: bool = True
     paddle_python_executable: str = "C:/Users/26423/.conda/envs/paddle_test/python.exe"
