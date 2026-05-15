@@ -42,7 +42,7 @@ ocr_service = OCRService(
     qwen_service=qwen_service,
     paddle_ocr_service=paddle_ocr_service,
 )
-evidence_service = EvidenceService()
+evidence_service = EvidenceService(qwen_service=qwen_service, settings=settings)
 confidence_service = ConfidenceService()
 planner = Planner()
 parser_agent = ContractParserAgent(qwen_service=qwen_service, settings=settings)

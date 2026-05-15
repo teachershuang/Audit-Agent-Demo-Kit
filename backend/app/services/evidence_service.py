@@ -1,20 +1,42 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from difflib import SequenceMatcher
+from typing import Any
 
+from app.config import Settings
 from app.schemas.contract import ClauseTag, ContractAnalysisResult, ContractPage, ContractSection, EvidenceRef, KeyFact
+from app.services.qwen_service import QwenService
 
 
 class EvidenceService:
-    def attach_evidences(
+    def __init__(
+        self,
+        qwen_service: QwenService | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        self.qwen_service = qwen_service
+        self.parallelism = max(1, getattr(settings, "qwen_parallel_requests", 4))
+
+    async def attach_evidences(
         self,
         pages: list[ContractPage],
         sections: list[ContractSection],
         clauses: list[ClauseTag],
         key_facts: list[KeyFact],
     ) -> None:
+        for page in pages:
+            page.evidences = []
+
+        section_blocks = await self._ground_sections(pages, sections)
+        clause_blocks = await self._ground_clauses(pages, clauses)
+        fact_blocks = await self._ground_key_facts(pages, key_facts)
+
         for section in sections:
+            if section.id in section_blocks:
+                section.blockIds = section_blocks[section.id]
             evidence = self._locate_evidence(
                 pages=pages,
                 target_text=f"{section.title} {section.summary}",
@@ -27,6 +49,8 @@ class EvidenceService:
             section.evidenceId = evidence.id
 
         for clause in clauses:
+            if clause.id in clause_blocks:
+                clause.blockIds = clause_blocks[clause.id]
             evidence = self._locate_evidence(
                 pages=pages,
                 target_text=clause.rawText or clause.summary,
@@ -39,13 +63,15 @@ class EvidenceService:
             clause.evidenceId = evidence.id
 
         for fact in key_facts:
-            evidence = self._locate_text(
+            grounded_ids = fact_blocks.get(fact.id, [])
+            evidence = self._locate_evidence(
                 pages=pages,
                 target_text=f"{fact.label} {fact.value}",
                 source_type="fact",
                 source_id=fact.id,
                 page_hint=fact.page,
                 accent="cyan",
+                block_ids=grounded_ids,
             )
             fact.evidenceId = evidence.id
 
@@ -57,6 +83,201 @@ class EvidenceService:
                 if current is None or evidence.isPrimary:
                     index[evidence.id] = evidence
         return index
+
+    async def _ground_sections(
+        self,
+        pages: list[ContractPage],
+        sections: list[ContractSection],
+    ) -> dict[str, list[str]]:
+        candidates = [
+            {
+                "candidateId": section.id,
+                "page": section.page,
+                "title": section.title,
+                "summary": section.summary,
+                "snippet": f"{section.title}\n{section.summary}",
+            }
+            for section in sections
+        ]
+        return await self._ground_candidates(pages, candidates, top_key="sections", item_kind="section")
+
+    async def _ground_clauses(
+        self,
+        pages: list[ContractPage],
+        clauses: list[ClauseTag],
+    ) -> dict[str, list[str]]:
+        candidates = [
+            {
+                "candidateId": clause.id,
+                "page": clause.page,
+                "title": clause.label,
+                "summary": clause.summary,
+                "snippet": clause.rawText or clause.summary,
+            }
+            for clause in clauses
+        ]
+        return await self._ground_candidates(pages, candidates, top_key="clauses", item_kind="clause")
+
+    async def _ground_key_facts(
+        self,
+        pages: list[ContractPage],
+        key_facts: list[KeyFact],
+    ) -> dict[str, list[str]]:
+        candidates = [
+            {
+                "candidateId": fact.id,
+                "page": fact.page,
+                "title": fact.label,
+                "summary": fact.value,
+                "snippet": f"{fact.label}: {fact.value}",
+            }
+            for fact in key_facts
+        ]
+        return await self._ground_candidates(pages, candidates, top_key="facts", item_kind="fact")
+
+    async def _ground_candidates(
+        self,
+        pages: list[ContractPage],
+        candidates: list[dict[str, Any]],
+        top_key: str,
+        item_kind: str,
+    ) -> dict[str, list[str]]:
+        if not self.qwen_service or not candidates:
+            return {}
+
+        batches = self._chunk_items(candidates, 4)
+        tasks = [self._ground_batch(pages, batch, top_key=top_key, item_kind=item_kind) for batch in batches]
+        results = await self._gather_limited(tasks, min(self.parallelism, max(1, len(tasks))))
+        merged: dict[str, list[str]] = {}
+        for batch_map in results:
+            for candidate_id, block_ids in batch_map.items():
+                if block_ids:
+                    merged[candidate_id] = block_ids
+        return merged
+
+    async def _ground_batch(
+        self,
+        pages: list[ContractPage],
+        batch: list[dict[str, Any]],
+        top_key: str,
+        item_kind: str,
+    ) -> dict[str, list[str]]:
+        page_scope = self._candidate_page_scope(batch, pages, radius=1)
+        if not page_scope:
+            page_scope = pages[: min(3, len(pages))]
+        try:
+            payload = await self.qwen_service.chat_json(
+                system_prompt=(
+                    "You are grounding already-identified contract items back to OCR blocks. "
+                    "Do not reinterpret the item type. Only map each candidate to the best supporting blockIds "
+                    "from the provided OCR blocks. You may return multiple non-contiguous blockIds when the evidence "
+                    "crosses pages or is split. Do not invent blockIds."
+                ),
+                user_prompt=(
+                    f"Candidates ({item_kind}):\n{json.dumps(batch, ensure_ascii=False)}\n"
+                    f"OCR page scope:\n{json.dumps(self._grounding_pages_payload(page_scope), ensure_ascii=False)}\n"
+                    f"Return one JSON object with top-level key `{top_key}`. "
+                    f"Each item must include candidateId and blockIds."
+                ),
+                schema={"type": "object"},
+                timeout=120,
+            )
+        except Exception:
+            return {}
+
+        grounded = payload.get(top_key)
+        if not isinstance(grounded, list):
+            return {}
+        results: dict[str, list[str]] = {}
+        for item in grounded:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("candidateId") or "").strip()
+            if not candidate_id:
+                continue
+            block_ids = item.get("blockIds") or item.get("evidenceBlockIds") or item.get("supportingBlockIds") or []
+            normalized = self._normalize_block_ids(block_ids)
+            if normalized:
+                results[candidate_id] = normalized
+        return results
+
+    @staticmethod
+    def _grounding_pages_payload(pages: list[ContractPage]) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for page in pages:
+            blocks = [
+                {
+                    "id": block.id,
+                    "text": block.text.strip()[:220],
+                    "x": block.x,
+                    "y": block.y,
+                    "width": block.width,
+                    "height": block.height,
+                    "emphasis": block.emphasis,
+                }
+                for block in page.blocks[:100]
+                if block.text.strip()
+            ]
+            payload.append(
+                {
+                    "page": page.page,
+                    "title": page.title,
+                    "pageText": "\n".join(block["text"] for block in blocks)[:6000],
+                    "blocks": blocks,
+                }
+            )
+        return payload
+
+    @staticmethod
+    def _candidate_page_scope(
+        items: list[dict[str, Any]],
+        pages: list[ContractPage],
+        radius: int,
+    ) -> list[ContractPage]:
+        page_numbers: set[int] = set()
+        max_page = max((page.page for page in pages), default=1)
+        for item in items:
+            try:
+                page = int(item.get("page"))
+            except Exception:
+                page = None
+            if page is None:
+                continue
+            for candidate in range(max(1, page - radius), min(max_page, page + radius) + 1):
+                page_numbers.add(candidate)
+        if not page_numbers:
+            return pages[: min(3, len(pages))]
+        return [page for page in pages if page.page in page_numbers]
+
+    @staticmethod
+    def _normalize_block_ids(candidate: Any) -> list[str]:
+        if isinstance(candidate, list):
+            values = [str(item).strip() for item in candidate if str(item).strip()]
+        elif isinstance(candidate, str):
+            values = [part.strip() for part in re.split(r"[,;\s]+", candidate) if part.strip()]
+        else:
+            values = []
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    async def _gather_limited(self, coroutines: list[Any], limit: int) -> list[Any]:
+        semaphore = asyncio.Semaphore(max(1, limit))
+
+        async def runner(coro: Any) -> Any:
+            async with semaphore:
+                return await coro
+
+        return await asyncio.gather(*(runner(coro) for coro in coroutines))
+
+    @staticmethod
+    def _chunk_items(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+        return [items[index : index + size] for index in range(0, len(items), max(1, size))]
 
     def _locate_evidence(
         self,

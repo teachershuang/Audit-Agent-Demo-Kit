@@ -156,6 +156,7 @@ class OCRService:
                     width=width,
                     height=height,
                     imageUrl=f"/api/contracts/{task_id}/pages/{page_number}/image",
+                    imageLocalPath=str(image_path),
                     blocks=blocks,
                     evidences=[],
                 )
@@ -198,6 +199,7 @@ class OCRService:
             width=width,
             height=height,
             imageUrl=f"/api/contracts/{task_id}/pages/1/image",
+            imageLocalPath=str(image_path),
             blocks=[],
             evidences=[],
         )
@@ -627,6 +629,7 @@ class OCRService:
             width=width,
             height=height,
             imageUrl=f"/api/contracts/{task_id}/pages/1/image",
+            imageLocalPath=str(image_path),
             blocks=blocks,
             evidences=[],
         )
@@ -819,6 +822,7 @@ class OCRService:
                 page = ContractPage.model_validate(raw_page)
                 page.blocks = self._normalize_cached_block_ids(page)
                 page.imageUrl = f"/api/contracts/{task_id}/pages/{page.page}/image"
+                page.imageLocalPath = str(page_dir / f"page_{page.page:03d}.png")
                 pages.append(page)
             return ExtractedDocument(
                 pages=pages,

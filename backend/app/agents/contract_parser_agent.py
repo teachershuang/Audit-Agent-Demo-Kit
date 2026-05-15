@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 from typing import Any, TypeVar
 
 from app.config import Settings
@@ -69,14 +70,9 @@ class ContractParserAgent:
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
         semantic_sections = await self._request_sections(pages)
-        grounded_items = await self._request_grounded_sections(pages, semantic_sections)
-        grounded_sections = self._build_sections_from_items(grounded_items, pages)
-        if self._grounded_sections_are_sufficient(grounded_sections, pages):
-            return grounded_sections
-
-        semantic_fallback = self._build_sections_from_items(semantic_sections, pages)
-        if semantic_fallback:
-            return semantic_fallback
+        semantic_results = self._build_sections_from_items(semantic_sections, pages)
+        if self._derived_sections_are_sufficient(semantic_results, pages):
+            return semantic_results
         return self._derive_sections_locally(pages)
 
     async def identify_clauses(
@@ -85,14 +81,9 @@ class ContractParserAgent:
         sections: list[ContractSection],
     ) -> list[ClauseTag]:
         semantic_clauses = await self._request_clauses(pages, sections)
-        grounded_items = await self._request_grounded_clauses(pages, sections, semantic_clauses)
-        grounded_clauses = self._build_clauses_from_items(grounded_items, pages)
-        if self._derived_clauses_are_sufficient(grounded_clauses):
-            return self._dedupe_clauses(grounded_clauses)
-
-        semantic_fallback = self._build_clauses_from_items(semantic_clauses, pages)
-        if semantic_fallback:
-            return self._dedupe_clauses(semantic_fallback)
+        semantic_results = self._build_clauses_from_items(semantic_clauses, pages)
+        if self._derived_clauses_are_sufficient(semantic_results):
+            return self._dedupe_clauses(semantic_results)
         return self._dedupe_clauses(self._derive_clauses_locally(pages))
 
     async def extract_key_facts(
@@ -990,6 +981,142 @@ class ContractParserAgent:
                     confidence=0.2,
                     evidenceId=None,
                     notes="模型未稳定识别到该字段",
+                )
+            )
+
+    async def _request_overview_key_facts(
+        self,
+        pages: list[ContractPage],
+        clauses: list[ClauseTag],
+    ) -> list[KeyFact]:
+        clause_payload = [
+            {
+                "id": clause.id,
+                "label": clause.label,
+                "coreLabel": clause.coreLabel,
+                "summary": clause.summary[:220],
+                "rawText": clause.rawText[:600],
+                "page": clause.page,
+            }
+            for clause in clauses[:18]
+        ]
+        page_payload = [
+            {
+                "page": page.page,
+                "text": "\n".join(self._clean(block.text) for block in page.blocks[:32])[:2200],
+            }
+            for page in pages[:4]
+        ]
+
+        payload: dict[str, Any] | None = None
+        first_page = pages[0] if pages else None
+        first_page_image = Path(first_page.imageLocalPath) if first_page and first_page.imageLocalPath else None
+        if first_page_image and first_page_image.exists():
+            try:
+                payload = await self.qwen_service.vision_json(
+                    prompt=(
+                        "You are extracting executive overview fields from the first page of a Chinese contract. "
+                        "Return only one JSON object with top-level key `overviewFacts`. "
+                        "It must contain exactly four items with labels "
+                        "[\"\\u5408\\u540c\\u7f16\\u53f7\", \"\\u4e3b\\u4f53\\u6458\\u8981\", "
+                        "\"\\u7532\\u4e59\\u65b9\\u4fe1\\u606f\", \"\\u670d\\u52a1\\u5185\\u5bb9\"]. "
+                        "Values must be concise Chinese summaries suitable for a leadership demo. "
+                        "If the contract number is not explicitly shown, output "
+                        "\"\\u672a\\u63d0\\u53d6\" and do not guess. "
+                        "Each item must include label, value, page, confidence, evidenceText, notes."
+                    ),
+                    image_path=first_page_image,
+                    schema={"type": "object"},
+                    timeout=120,
+                )
+            except Exception:
+                payload = None
+
+        if payload is None:
+            payload = await self.qwen_service.chat_json(
+                system_prompt=(
+                    "You are extracting four management-level overview facts from a Chinese contract. "
+                    "Return concise Chinese output only. "
+                    "Do not invent missing values. If the contract number is unclear, output "
+                    "\"\\u672a\\u63d0\\u53d6\"."
+                ),
+                user_prompt=(
+                    f"Front-page and nearby OCR excerpts:\n{json.dumps(page_payload, ensure_ascii=False)}\n"
+                    f"Clause candidates:\n{json.dumps(clause_payload, ensure_ascii=False)}\n"
+                    "Return one JSON object with top-level key `overviewFacts`. "
+                    "It must contain exactly these four labels: "
+                    "[\"\\u5408\\u540c\\u7f16\\u53f7\", \"\\u4e3b\\u4f53\\u6458\\u8981\", "
+                    "\"\\u7532\\u4e59\\u65b9\\u4fe1\\u606f\", \"\\u670d\\u52a1\\u5185\\u5bb9\"]. "
+                    "Each item must include label, value, page, confidence, evidenceText, notes."
+                ),
+                schema={"type": "object"},
+                timeout=90,
+            )
+
+        items = self._pick_first_array(payload, ["overviewFacts", "keyFacts", "facts"])
+        facts: list[KeyFact] = []
+        allowed_labels = {
+            "\u5408\u540c\u7f16\u53f7",
+            "\u4e3b\u4f53\u6458\u8981",
+            "\u7532\u4e59\u65b9\u4fe1\u606f",
+            "\u670d\u52a1\u5185\u5bb9",
+        }
+        for index, item in enumerate(items, start=1):
+            label = self._normalize_overview_label(self._clean(item.get("label") or item.get("name")))
+            if label not in allowed_labels:
+                continue
+            value = self._clean(item.get("value") or item.get("content"))
+            if not value:
+                continue
+            evidence_text = self._clean(item.get("evidenceText") or item.get("evidence") or value)
+            page = self._coerce_page(item.get("page"), pages, evidence_text or value)
+            facts.append(
+                KeyFact(
+                    id=f"overview_{index:03d}",
+                    label=label,
+                    value=value,
+                    page=page,
+                    confidence=self._clamp_confidence(item.get("confidence")),
+                    evidenceId=self._clean(item.get("evidenceId")) or self._locate_evidence_id(pages, page, evidence_text),
+                    notes=self._clean(item.get("notes") or item.get("remark")) or None,
+                )
+            )
+        return facts
+
+    @staticmethod
+    def _normalize_overview_label(label: str) -> str:
+        compact = label.strip()
+        if compact in {"\u5408\u540c\u7f16\u53f7", "\u534f\u8bae\u7f16\u53f7", "\u7f16\u53f7"}:
+            return "\u5408\u540c\u7f16\u53f7"
+        if compact in {"\u4e3b\u4f53\u6458\u8981", "\u4e3b\u4f53\u4fe1\u606f\u6458\u8981", "\u5408\u540c\u4e3b\u4f53\u6458\u8981", "\u5408\u540c\u57fa\u672c\u4fe1\u606f"}:
+            return "\u4e3b\u4f53\u6458\u8981"
+        if compact in {"\u7532\u4e59\u65b9\u4fe1\u606f", "\u5408\u540c\u4e3b\u4f53\u4fe1\u606f", "\u53cc\u65b9\u4e3b\u4f53\u4fe1\u606f", "\u4e3b\u4f53\u4fe1\u606f"}:
+            return "\u7532\u4e59\u65b9\u4fe1\u606f"
+        if compact in {"\u670d\u52a1\u5185\u5bb9", "\u9879\u76ee\u5185\u5bb9", "\u670d\u52a1/\u91c7\u8d2d/\u5de5\u7a0b\u5185\u5bb9", "\u5408\u540c\u670d\u52a1\u5185\u5bb9"}:
+            return "\u670d\u52a1\u5185\u5bb9"
+        return compact
+
+    @staticmethod
+    def _ensure_required_overview_facts(facts: list[KeyFact]) -> None:
+        required = {
+            "\u5408\u540c\u7f16\u53f7": "\u672a\u63d0\u53d6",
+            "\u4e3b\u4f53\u6458\u8981": "\u5f85\u63d0\u53d6",
+            "\u7532\u4e59\u65b9\u4fe1\u606f": "\u5f85\u63d0\u53d6",
+            "\u670d\u52a1\u5185\u5bb9": "\u5f85\u63d0\u53d6",
+        }
+        labels = {fact.label for fact in facts}
+        for label, fallback in required.items():
+            if label in labels:
+                continue
+            facts.append(
+                KeyFact(
+                    id=f"fact_placeholder_{len(facts) + 1:03d}",
+                    label=label,
+                    value=fallback,
+                    page=1,
+                    confidence=0.2,
+                    evidenceId=None,
+                    notes="\u6a21\u578b\u672a\u7a33\u5b9a\u8bc6\u522b\u5230\u8be5\u5b57\u6bb5",
                 )
             )
 

@@ -164,7 +164,7 @@ class ContractAgent:
             )
         )
 
-        self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
+        await self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
         self._emit_progress(progress_callback, 92, "evidence_mapping", "正在把章节、条款和关键信息统一映射回合同原文。")
         agent_steps.append(
             self._step(

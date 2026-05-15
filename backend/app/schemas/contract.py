@@ -41,6 +41,7 @@ class ContractPage(BaseModel):
     width: int
     height: int
     imageUrl: str | None = None
+    imageLocalPath: str | None = None
     blocks: list[DocumentBlock] = Field(default_factory=list)
     evidences: list[EvidenceRef] = Field(default_factory=list)
 
