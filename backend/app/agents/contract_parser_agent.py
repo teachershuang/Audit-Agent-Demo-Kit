@@ -100,8 +100,10 @@ class ContractParserAgent:
         pages: list[ContractPage],
         clauses: list[ClauseTag],
     ) -> list[KeyFact]:
-        derived_facts = self._derive_key_facts_from_clauses(clauses)
-        if self._derived_facts_are_sufficient(derived_facts):
+        derived_facts = self._dedupe_key_facts(
+            self._derive_key_facts_from_pages(pages) + self._derive_key_facts_from_clauses_v2(clauses)
+        )
+        if self._derived_facts_are_sufficient_v2(derived_facts):
             return self._dedupe_key_facts(derived_facts)
 
         clause_batches = self._chunk_items(clauses, self.key_fact_batch_size)
@@ -730,6 +732,47 @@ class ContractParserAgent:
         return None
 
     @staticmethod
+    def _derive_key_facts_from_pages(pages: list[ContractPage]) -> list[KeyFact]:
+        facts: list[KeyFact] = []
+        seen_values: set[str] = set()
+        patterns = [
+            re.compile(
+                r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\-_./()（）]{4,80})"
+            ),
+            re.compile(r"\b([A-Z]{1,6}-\d{4,}[-A-Z0-9/]*)\b"),
+        ]
+
+        for page in pages[: min(len(pages), 4)]:
+            for block in page.blocks[:80]:
+                text = ContractParserAgent._clean(block.text)
+                if not text:
+                    continue
+                for pattern in patterns:
+                    match = pattern.search(text)
+                    if not match:
+                        continue
+                    value = match.group(1).strip().strip("。；;，,")
+                    if len(value) < 4:
+                        continue
+                    dedupe_key = value.lower()
+                    if dedupe_key in seen_values:
+                        continue
+                    seen_values.add(dedupe_key)
+                    facts.append(
+                        KeyFact(
+                            id=f"fact_{len(facts) + 1:03d}",
+                            label="合同编号",
+                            value=value,
+                            page=page.page,
+                            confidence=0.9 if "编号" in text else 0.72,
+                            evidenceId=block.id,
+                            notes="基于 OCR 原文块直接提取",
+                        )
+                    )
+                    break
+        return facts
+
+    @staticmethod
     def _derive_key_facts_from_clauses(clauses: list[ClauseTag]) -> list[KeyFact]:
         facts: list[KeyFact] = []
 
@@ -778,6 +821,71 @@ class ContractParserAgent:
             elif clause_key == "服务/采购/工程内容":
                 add_fact("服务内容", clause.summary or clause.rawText[:160], clause)
         return facts
+
+    @staticmethod
+    def _derive_key_facts_from_clauses_v2(clauses: list[ClauseTag]) -> list[KeyFact]:
+        facts: list[KeyFact] = []
+
+        def add_fact(label: str, value: str, clause: ClauseTag, notes: str | None = None) -> None:
+            cleaned = value.strip()
+            if not cleaned:
+                return
+            facts.append(
+                KeyFact(
+                    id=f"fact_{len(facts) + 1:03d}",
+                    label=label,
+                    value=cleaned,
+                    page=clause.page,
+                    confidence=max(0.55, min(clause.confidence, 0.95)),
+                    evidenceId=clause.evidenceId,
+                    notes=notes,
+                )
+            )
+
+        party_pattern = re.compile(r"(甲方|乙方)(?:名称)?[:：]?\s*([^\n，。；;]{2,60})")
+        amount_pattern = re.compile(r"(?:人民币|合同总额|总金额|金额)[^0-9]{0,8}([0-9][0-9,，.]*(?:元|万元)?)")
+        contract_number_pattern = re.compile(
+            r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\\-_/().（）]{4,80})"
+        )
+
+        for clause in clauses:
+            clause_key = (clause.coreLabel or clause.label).strip()
+            if clause_key == "合同基本信息":
+                number_match = contract_number_pattern.search(clause.rawText)
+                if number_match:
+                    add_fact("合同编号", number_match.group(1), clause)
+                add_fact("合同基本信息", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "甲乙方信息":
+                matched = False
+                for match in party_pattern.finditer(clause.rawText):
+                    add_fact(match.group(1), match.group(2), clause)
+                    matched = True
+                add_fact("甲乙方信息", clause.summary or clause.rawText[:120], clause)
+                if not matched:
+                    compact = clause.summary or clause.rawText[:120]
+                    add_fact("主体摘要", compact, clause, notes="主体名称建议人工复核")
+            elif clause_key == "合同金额":
+                match = amount_pattern.search(clause.rawText)
+                add_fact("合同金额", match.group(1) if match else clause.summary, clause)
+            elif clause_key == "付款条件":
+                add_fact("付款条件", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "履约期限":
+                add_fact("履约期限", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "验收标准":
+                add_fact("验收标准", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "争议解决":
+                add_fact("争议解决", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "账户信息":
+                add_fact("账户信息", clause.summary or clause.rawText[:160], clause)
+            elif clause_key == "服务/采购/工程内容":
+                add_fact("服务内容", clause.summary or clause.rawText[:160], clause)
+        return facts
+
+    @staticmethod
+    def _derived_facts_are_sufficient_v2(facts: list[KeyFact]) -> bool:
+        labels = {fact.label for fact in facts}
+        coverage = {"甲方", "乙方", "甲乙方信息", "合同编号", "合同金额", "付款条件", "验收标准", "争议解决", "账户信息"}
+        return len(facts) >= 6 and len(labels & coverage) >= 4 and ("合同编号" in labels or "合同基本信息" in labels)
 
     @staticmethod
     def _dedupe_clauses(clauses: list[ClauseTag]) -> list[ClauseTag]:

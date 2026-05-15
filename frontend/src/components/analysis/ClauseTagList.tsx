@@ -14,19 +14,19 @@ export function ClauseTagList({
     {
       key: "core",
       title: "核心标签",
-      description: "稳定口径，适合管理层快速浏览。",
+      description: "标准合同视角下的稳定标签，适合管理层快速浏览。",
       items: clauses.filter((clause) => clause.labelSource === "core"),
     },
     {
       key: "user_configured",
       title: "用户配置标签",
-      description: "来自你主动配置的关注内容。",
+      description: "来自关系配置或专项关注项的定向识别结果。",
       items: clauses.filter((clause) => clause.labelSource === "user_configured"),
     },
     {
       key: "agent_discovered",
       title: "Agent 新发现",
-      description: "模型额外识别出的候选条款，建议结合原文复核。",
+      description: "模型额外识别出的候选条款，建议结合原文进一步复核。",
       items: clauses.filter((clause) => clause.labelSource === "agent_discovered"),
     },
   ].filter((group) => group.items.length > 0);

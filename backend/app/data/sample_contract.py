@@ -2,6 +2,7 @@ from __future__ import annotations
 
 SAMPLE_CONTRACT_TEXT = """
 信息化系统实施服务合同
+合同编号：HT-2024-SCFC-017
 甲方：华东智联能源集团有限公司
 乙方：上海智表数科技术有限公司
 项目名称：供应链风控平台建设

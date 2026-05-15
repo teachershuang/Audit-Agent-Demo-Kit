@@ -5,6 +5,7 @@ import { ConfidenceBadge } from "../shared/ConfidenceBadge";
 interface HeaderBarProps {
   task: ContractTask | null;
   busy: boolean;
+  contractNumber: string | null;
   onUpload: (file: File) => void;
   onLoadSample: () => void;
   onReanalyze: () => void;
@@ -21,6 +22,7 @@ const statusMap = {
 export function HeaderBar({
   task,
   busy,
+  contractNumber,
   onUpload,
   onLoadSample,
   onReanalyze,
@@ -43,13 +45,23 @@ export function HeaderBar({
             <p className="mt-2 text-sm text-slate-300">
               合同结构、关键条款、证据定位与审计关注事项统一呈现。
             </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
+                合同编号 {contractNumber ?? "待识别"}
+              </span>
+              {task?.fileName ? (
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
+                  文件 {task.fileName}
+                </span>
+              ) : null}
+            </div>
             {task?.stageDetail ? (
               <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p>
             ) : null}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 xl:min-w-[420px] xl:items-end">
+        <div className="flex flex-col gap-3 xl:min-w-[460px] xl:items-end">
           <div className="flex w-full flex-col gap-2 xl:items-end">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
@@ -61,7 +73,7 @@ export function HeaderBar({
               <ConfidenceBadge value={task?.confidenceOverview.overall ?? 0.86} label="总览" />
             </div>
             {busy && task ? (
-              <div className="w-full max-w-[340px]">
+              <div className="w-full max-w-[360px]">
                 <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
                   <span>{task.currentStage ?? "processing"}</span>
                   <span>{task.progressPercent}%</span>

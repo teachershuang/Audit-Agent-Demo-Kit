@@ -62,7 +62,7 @@ export function ContractViewer({
           </p>
           <h2 className="mt-1 font-display text-xl text-white">合同原件区</h2>
           <p className="mt-2 text-sm text-slate-300">
-            点击右侧章节、条款或关注事项后，左侧自动跳转页码并高亮证据区域。
+            左侧原件区独立滚动。点击右侧章节、条款或关注事项后，会自动跳转到对应页并高亮证据区域。
           </p>
         </div>
 
@@ -86,13 +86,13 @@ export function ContractViewer({
       </div>
 
       <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[178px_1fr]">
-        <div className="min-h-0">
+        <div className="min-h-0 overflow-hidden">
           <PageThumbnailList pages={pages} activePage={activePage} onSelect={onSelectPage} />
         </div>
 
         <div
           ref={containerRef}
-          className="thin-scrollbar min-h-0 overflow-y-auto rounded-[24px] border border-white/8 bg-slate-950/30 p-4"
+          className="thin-scrollbar min-h-0 overflow-y-auto overscroll-contain rounded-[24px] border border-white/8 bg-slate-950/30 p-4"
         >
           {activeEvidence ? (
             <div className="mb-4 rounded-2xl border border-cyan-400/18 bg-cyan-400/[0.08] px-4 py-3 text-sm text-cyan-50">
@@ -100,7 +100,7 @@ export function ContractViewer({
                 ? `当前高亮证据共 ${activeEvidenceSegments.length} 个片段，覆盖第 ${[
                     ...new Set(activeEvidenceSegments.map((item) => item.page)),
                   ].join("、")} 页；当前代表片段位于第 ${activeEvidence.page} 页。`
-                : `当前高亮证据：第 ${activeEvidence.page} 页，定位到“${activeEvidence.text.slice(0, 42)}”`}
+                : `当前高亮证据位于第 ${activeEvidence.page} 页，定位到“${activeEvidence.text.slice(0, 42)}”。`}
             </div>
           ) : null}
 

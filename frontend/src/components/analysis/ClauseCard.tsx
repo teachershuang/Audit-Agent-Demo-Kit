@@ -48,7 +48,7 @@ export function ClauseCard({
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
         <span>页码 {clause.page}</span>
         <span>·</span>
-        <span>{clause.needHumanReview ? "建议人工复核" : "自动识别稳定"}</span>
+        <span>{clause.needHumanReview ? "建议人工复核" : "自动识别较稳定"}</span>
         <span>·</span>
         <span>关联关注点 {clause.relatedAuditFocusIds.length}</span>
       </div>

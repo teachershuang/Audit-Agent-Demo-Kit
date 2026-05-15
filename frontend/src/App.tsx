@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { AnalysisTabs } from "./components/analysis/AnalysisTabs";
 import { ContractViewer } from "./components/contract/ContractViewer";
 import { AppShell } from "./components/layout/AppShell";
@@ -6,7 +6,26 @@ import { HeaderBar } from "./components/layout/HeaderBar";
 import { ErrorBanner } from "./components/shared/ErrorBanner";
 import { EmptyState } from "./components/shared/EmptyState";
 import { LoadingState } from "./components/shared/LoadingState";
+import type { ClauseTag, KeyFact } from "./types/contract";
 import { useContractStore } from "./store/contractStore";
+
+function deriveContractNumber(keyFacts: KeyFact[], clauses: ClauseTag[]): string | null {
+  const fact = keyFacts.find((item) => item.label.includes("合同编号") || item.label.includes("协议编号"));
+  if (fact?.value.trim()) {
+    return fact.value.trim();
+  }
+
+  const pattern =
+    /(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\-_/()（）]{4,80})/;
+  for (const clause of clauses) {
+    const match = clause.rawText.match(pattern);
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
 
 function App() {
   const {
@@ -49,17 +68,22 @@ function App() {
     }
   }, [activeEntity, activeTab]);
 
+  const contractNumber = useMemo(
+    () => deriveContractNumber(result?.keyFacts ?? [], result?.clauses ?? []),
+    [result?.keyFacts, result?.clauses],
+  );
+
   const leftPanel = !result ? (
     isBusy ? (
       <LoadingState
         label={task?.currentStage === "ocr_running" ? "正在识别扫描页文本..." : "正在启动分析任务..."}
-        detail={task?.stageDetail ?? "正在准备文档并调用解析链路。"}
+        detail={task?.stageDetail ?? "正在准备文档并调度解析链路。"}
         progress={task?.progressPercent ?? 0}
       />
     ) : (
       <EmptyState
         title="上传合同开始分析"
-        description="支持 PDF 与图片合同，上传后进入结构解析、条款识别与证据定位。"
+        description="支持 PDF 与图片合同。系统会完成结构还原、条款识别、证据定位与审计关注生成。"
         actionLabel="上传合同"
         onAction={() => {
           const input = document.getElementById("contract-upload-input") as HTMLInputElement | null;
@@ -87,7 +111,7 @@ function App() {
     ) : (
       <EmptyState
         title="结果区待加载"
-        description="完成解析后将在此显示章节、条款、关系配置、关注事项与证据链。"
+        description="上传或快速载入合同后，这里会显示章节还原、条款标签、关系配置、审计关注点和证据链。"
       />
     )
   ) : (
@@ -96,6 +120,8 @@ function App() {
       activeEntity={activeEntity}
       sections={result.sections}
       clauses={result.clauses}
+      keyFacts={result.keyFacts}
+      contractNumber={contractNumber}
       relations={relations}
       auditFocuses={auditFocuses}
       verificationItems={verificationItems}
@@ -135,7 +161,7 @@ function App() {
         <div>
           <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Agent 状态</div>
           <div className="mt-2 text-sm text-white">
-            {completedSteps} 个步骤已完成，{externalPendingCount} 项待进一步核验
+            已完成 {completedSteps} 个步骤，仍有 {externalPendingCount} 项待外部核验
           </div>
         </div>
         <div>
@@ -144,7 +170,7 @@ function App() {
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">证据链</div>
-          <div className="mt-2 text-sm text-white">结果与原文位置同步映射</div>
+          <div className="mt-2 text-sm text-white">结果与原文位置保持联动映射</div>
         </div>
       </div>
     </footer>
@@ -163,6 +189,7 @@ function App() {
           <HeaderBar
             task={currentTask}
             busy={isBusy}
+            contractNumber={contractNumber}
             onLoadSample={() => void loadSample()}
             onUpload={(file) => void uploadAndAnalyze(file)}
             onReanalyze={() => void reanalyze()}
