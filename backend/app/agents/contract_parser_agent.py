@@ -64,92 +64,31 @@ class ContractParserAgent:
         return hints
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
-        derived_sections = self._derive_sections_locally(pages)
-        if self._derived_sections_are_sufficient(derived_sections, pages):
-            return derived_sections
+        grounded_sections = self._build_sections_from_items(await self._request_grounded_sections(pages), pages)
+        if self._grounded_sections_are_sufficient(grounded_sections, pages):
+            return grounded_sections
 
-        if len(pages) <= max(self.section_batch_size * 3, 12):
-            raw_sections = await self._request_sections(pages)
-        else:
-            batches = self._page_batches(
-                pages=pages,
-                batch_size=self.section_batch_size,
-                overlap=self.section_batch_overlap,
-            )
-            batch_results = await self._gather_limited(
-                [self._request_sections(batch) for batch in batches],
-                limit=min(self.parallelism, len(batches)),
-            )
-            merged_candidates: list[dict[str, Any]] = []
-            for batch in batch_results:
-                merged_candidates.extend(batch)
-            raw_sections = await self._merge_section_candidates(merged_candidates)
-
-        sections: list[ContractSection] = []
-        for index, item in enumerate(raw_sections, start=1):
-            title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
-            if not title:
-                continue
-            evidence_text = self._clean(
-                item.get("evidenceText")
-                or item.get("snippet")
-                or item.get("text")
-                or item.get("rawText")
-            )
-            page = self._coerce_page(item.get("page"), pages, evidence_text)
-            sections.append(
-                ContractSection(
-                    id=self._clean(item.get("id")) or f"section_{index:03d}",
-                    title=title,
-                    level=self._coerce_level(item.get("level")),
-                    page=page,
-                    summary=self._clean(item.get("summary")) or evidence_text[:120] or f"{title} related section",
-                    confidence=self._clamp_confidence(item.get("confidence")),
-                    evidenceId=None,
-                )
-            )
-        return sections or derived_sections
+        fallback_sections = self._build_sections_from_items(await self._request_sections(pages), pages)
+        if fallback_sections:
+            return fallback_sections
+        return self._derive_sections_locally(pages)
 
     async def identify_clauses(
         self,
         pages: list[ContractPage],
         sections: list[ContractSection],
     ) -> list[ClauseTag]:
-        derived_clauses = self._derive_clauses_locally(pages, sections)
-        if self._derived_clauses_are_sufficient(derived_clauses):
-            return self._dedupe_clauses(derived_clauses)
+        grounded_clauses = self._build_clauses_from_items(
+            await self._request_grounded_clauses(pages, sections),
+            pages,
+        )
+        if self._derived_clauses_are_sufficient(grounded_clauses):
+            return self._dedupe_clauses(grounded_clauses)
 
-        page_batches = self._page_batches(pages=pages, batch_size=self.clause_batch_size, overlap=0)
-        tasks = [self._request_clauses(batch, sections) for batch in page_batches]
-        raw_batches = await self._gather_limited(tasks, limit=min(self.parallelism, len(tasks)))
-        raw_clauses: list[dict[str, Any]] = []
-        for batch in raw_batches:
-            raw_clauses.extend(batch)
-
-        clauses: list[ClauseTag] = []
-        for index, item in enumerate(raw_clauses, start=1):
-            label = self._normalize_label(item.get("label") or item.get("tag") or item.get("type"))
-            raw_text = self._clean(item.get("rawText") or item.get("text") or item.get("quote") or item.get("excerpt"))
-            summary = self._clean(item.get("summary")) or raw_text[:140]
-            if not label or not raw_text:
-                continue
-            page = self._coerce_page(item.get("page"), pages, raw_text)
-            evidence_id = self._clean(item.get("evidenceId")) or self._locate_evidence_id(pages, page, raw_text)
-            clauses.append(
-                ClauseTag(
-                    id=self._clean(item.get("id")) or f"clause_{index:03d}",
-                    label=label,
-                    title=self._clean(item.get("title")) or label,
-                    summary=summary,
-                    rawText=raw_text,
-                    page=page,
-                    confidence=self._clamp_confidence(item.get("confidence")),
-                    evidenceId=evidence_id or f"evidence_clause_{index:03d}",
-                    needHumanReview=self._to_bool(item.get("needHumanReview") or item.get("need_human_review")),
-                    relatedAuditFocusIds=[],
-                )
-            )
-        return self._dedupe_clauses(derived_clauses + clauses)
+        fallback_clauses = self._build_clauses_from_items(await self._request_clauses(pages, sections), pages)
+        if fallback_clauses:
+            return self._dedupe_clauses(fallback_clauses)
+        return self._dedupe_clauses(self._derive_clauses_locally(pages, sections))
 
     async def extract_key_facts(
         self,
@@ -191,6 +130,169 @@ class ContractParserAgent:
             merged_facts = self._dedupe_key_facts(derived_facts + facts)
             return merged_facts
         return self._dedupe_key_facts(derived_facts)
+
+    async def _request_grounded_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You reconstruct the real section structure of a Chinese contract from OCR blocks. "
+                "Use only the supplied OCR blocks. Every section must cite supporting blockIds from the input. "
+                "Do not invent sections. Prefer top-level sections and materially meaningful subsections. "
+                "Keep blockIds on the representative page of the section whenever possible."
+            ),
+            user_prompt=(
+                f"OCR pages with block ids:\n{json.dumps(self._grounding_pages_payload(pages), ensure_ascii=False)}\n"
+                "Return a JSON object with a top-level `sections` array. "
+                "Each section must include title, level, page, summary, confidence, and blockIds."
+            ),
+            schema={
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": ["string", "null"]},
+                                "title": {"type": ["string", "null"]},
+                                "level": {"type": ["integer", "number", "string", "null"]},
+                                "page": {"type": ["integer", "number", "string", "null"]},
+                                "summary": {"type": ["string", "null"]},
+                                "confidence": {"type": ["number", "string", "null"]},
+                                "blockIds": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    }
+                },
+            },
+            timeout=180,
+        )
+        return self._pick_first_array(payload, ["sections"])
+
+    async def _request_grounded_clauses(
+        self,
+        pages: list[ContractPage],
+        sections: list[ContractSection],
+    ) -> list[dict[str, Any]]:
+        section_payload = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "level": item.level,
+                "page": item.page,
+                "summary": item.summary,
+                "blockIds": item.blockIds,
+            }
+            for item in sections[:48]
+        ]
+        payload = await self.qwen_service.chat_json(
+            system_prompt=(
+                "You identify key audit and risk clauses in a Chinese contract from OCR blocks. "
+                f"Only use these labels: {', '.join(CLAUSE_LABELS)}. "
+                "Every clause must cite supporting blockIds from the OCR input. "
+                "Do not invent clauses that are not supported by the source blocks. "
+                "Use a compact set of representative blockIds from one page when possible."
+            ),
+            user_prompt=(
+                f"OCR pages with block ids:\n{json.dumps(self._grounding_pages_payload(pages), ensure_ascii=False)}\n"
+                f"Recognized sections:\n{json.dumps(section_payload, ensure_ascii=False)}\n"
+                "Return a JSON object with a top-level `clauses` array. "
+                "Each clause must include label, title, summary, rawText, page, confidence, needHumanReview, and blockIds."
+            ),
+            schema={
+                "type": "object",
+                "properties": {
+                    "clauses": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": ["string", "null"]},
+                                "label": {"type": ["string", "null"]},
+                                "title": {"type": ["string", "null"]},
+                                "summary": {"type": ["string", "null"]},
+                                "rawText": {"type": ["string", "null"]},
+                                "page": {"type": ["integer", "number", "string", "null"]},
+                                "confidence": {"type": ["number", "string", "null"]},
+                                "needHumanReview": {"type": ["boolean", "string", "null"]},
+                                "blockIds": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    }
+                },
+            },
+            timeout=180,
+        )
+        return self._pick_first_array(payload, ["clauses", "clauseTags", "clause_tags"])
+
+    def _build_sections_from_items(
+        self,
+        items: list[dict[str, Any]],
+        pages: list[ContractPage],
+    ) -> list[ContractSection]:
+        sections: list[ContractSection] = []
+        seen: set[tuple[int, str]] = set()
+        for index, item in enumerate(items, start=1):
+            title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
+            if not title:
+                continue
+            block_ids = self._extract_block_ids(item)
+            blocks = self._resolve_blocks(pages, block_ids)
+            block_text = self._join_blocks_text(blocks)
+            page = blocks[0][0].page if blocks else self._coerce_page(item.get("page"), pages, block_text or title)
+            key = (page, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            sections.append(
+                ContractSection(
+                    id=self._clean(item.get("id")) or f"section_{index:03d}",
+                    title=title,
+                    level=self._coerce_level(item.get("level")),
+                    page=page,
+                    summary=self._clean(item.get("summary")) or self._build_section_summary(block_text, title),
+                    confidence=self._clamp_confidence(item.get("confidence")),
+                    blockIds=[block.id for _, block in blocks] if blocks else block_ids,
+                    evidenceId=None,
+                )
+            )
+        sections.sort(key=lambda item: (item.page, item.level, item.title))
+        for index, section in enumerate(sections, start=1):
+            section.id = f"section_{index:03d}"
+        return sections
+
+    def _build_clauses_from_items(
+        self,
+        items: list[dict[str, Any]],
+        pages: list[ContractPage],
+    ) -> list[ClauseTag]:
+        clauses: list[ClauseTag] = []
+        for index, item in enumerate(items, start=1):
+            label = self._normalize_label(item.get("label") or item.get("tag") or item.get("type"))
+            block_ids = self._extract_block_ids(item)
+            blocks = self._resolve_blocks(pages, block_ids)
+            raw_text = self._join_blocks_text(blocks) or self._clean(
+                item.get("rawText") or item.get("text") or item.get("quote") or item.get("excerpt")
+            )
+            if not label or not raw_text:
+                continue
+            page = blocks[0][0].page if blocks else self._coerce_page(item.get("page"), pages, raw_text)
+            evidence_id = self._clean(item.get("evidenceId")) or self._locate_evidence_id(pages, page, raw_text)
+            clauses.append(
+                ClauseTag(
+                    id=self._clean(item.get("id")) or f"clause_{index:03d}",
+                    label=label,
+                    title=self._clean(item.get("title")) or label,
+                    summary=self._clean(item.get("summary")) or self._summarize_clause_text(raw_text),
+                    rawText=raw_text,
+                    page=page,
+                    confidence=self._clamp_confidence(item.get("confidence")),
+                    blockIds=[block.id for _, block in blocks] if blocks else block_ids,
+                    evidenceId=evidence_id or f"evidence_clause_{index:03d}",
+                    needHumanReview=self._to_bool(item.get("needHumanReview") or item.get("need_human_review")),
+                    relatedAuditFocusIds=[],
+                )
+            )
+        return clauses
 
     async def _request_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
         payload = await self.qwen_service.chat_json(
@@ -354,6 +456,29 @@ class ContractParserAgent:
         return clauses
 
     @staticmethod
+    def _grounding_pages_payload(pages: list[ContractPage]) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for page in pages:
+            blocks = [
+                {
+                    "id": block.id,
+                    "text": ContractParserAgent._clean(block.text)[:220],
+                    "emphasis": block.emphasis,
+                }
+                for block in page.blocks
+                if ContractParserAgent._clean(block.text)
+            ]
+            payload.append(
+                {
+                    "page": page.page,
+                    "title": page.title,
+                    "pageText": "\n".join(block["text"] for block in blocks)[:6000],
+                    "blocks": blocks,
+                }
+            )
+        return payload
+
+    @staticmethod
     def _pages_payload(pages: list[ContractPage]) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
         for page in pages:
@@ -369,6 +494,44 @@ class ContractParserAgent:
                 }
             )
         return payload
+
+    @staticmethod
+    def _extract_block_ids(item: dict[str, Any]) -> list[str]:
+        candidate = (
+            item.get("blockIds")
+            or item.get("evidenceBlockIds")
+            or item.get("supportingBlockIds")
+            or item.get("block_ids")
+        )
+        if isinstance(candidate, list):
+            return [str(value).strip() for value in candidate if str(value).strip()]
+        if isinstance(candidate, str):
+            return [part.strip() for part in re.split(r"[,;\s]+", candidate) if part.strip()]
+        return []
+
+    @staticmethod
+    def _resolve_blocks(
+        pages: list[ContractPage],
+        block_ids: list[str],
+    ) -> list[tuple[ContractPage, Any]]:
+        if not block_ids:
+            return []
+        order_map = {block_id: index for index, block_id in enumerate(block_ids)}
+        resolved: list[tuple[ContractPage, Any]] = []
+        for page in pages:
+            for block in page.blocks:
+                if block.id in order_map:
+                    resolved.append((page, block))
+        resolved.sort(key=lambda item: order_map[item[1].id])
+        return resolved
+
+    @staticmethod
+    def _join_blocks_text(blocks: list[tuple[ContractPage, Any]]) -> str:
+        return "\n".join(
+            ContractParserAgent._clean(block.text)
+            for _, block in blocks
+            if ContractParserAgent._clean(block.text)
+        )[:2000]
 
     @staticmethod
     def _pick_first_array(payload: dict[str, Any], keys: list[str]) -> list[dict[str, Any]]:
@@ -970,6 +1133,13 @@ class ContractParserAgent:
         return top_level_count >= 5
 
     @staticmethod
+    def _grounded_sections_are_sufficient(sections: list[ContractSection], pages: list[ContractPage]) -> bool:
+        if not ContractParserAgent._derived_sections_are_sufficient(sections, pages):
+            return False
+        grounded_count = sum(1 for item in sections if item.blockIds)
+        return grounded_count >= max(4, len(sections) // 2)
+
+    @staticmethod
     def _derived_clauses_are_sufficient(clauses: list[ClauseTag]) -> bool:
         labels = {item.label for item in clauses}
         critical = {
@@ -982,7 +1152,8 @@ class ContractParserAgent:
             "争议解决",
             "账户信息",
         }
-        return len(clauses) >= 10 and len(labels & critical) >= 7
+        grounded_count = sum(1 for item in clauses if item.blockIds)
+        return len(clauses) >= 10 and len(labels & critical) >= 7 and grounded_count >= max(6, len(clauses) // 2)
 
     @staticmethod
     def _derived_facts_are_sufficient(facts: list[KeyFact]) -> bool:

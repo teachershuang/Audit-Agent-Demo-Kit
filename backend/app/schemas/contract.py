@@ -49,6 +49,7 @@ class ContractSection(BaseModel):
     page: int
     summary: str
     confidence: float
+    blockIds: list[str] = Field(default_factory=list)
     evidenceId: str | None = None
 
 
@@ -60,6 +61,7 @@ class ClauseTag(BaseModel):
     rawText: str
     page: int
     confidence: float
+    blockIds: list[str] = Field(default_factory=list)
     evidenceId: str
     needHumanReview: bool = False
     relatedAuditFocusIds: list[str] = Field(default_factory=list)

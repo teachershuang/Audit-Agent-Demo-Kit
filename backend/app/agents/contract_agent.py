@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -101,44 +100,31 @@ class ContractAgent:
             )
         )
 
-        section_hints = self.parser_agent.derive_section_hints(extracted.pages)
         self._emit_progress(
             progress_callback,
-            62,
-            "structure_and_clause_analysis",
-            "Reconstructing sections and identifying clauses in parallel.",
+            60,
+            "section_reconstruction",
+            "Grounding contract sections to OCR blocks.",
         )
-        section_task = asyncio.create_task(self.parser_agent.reconstruct_sections(extracted.pages))
-        clause_task = asyncio.create_task(self.parser_agent.identify_clauses(extracted.pages, section_hints))
-        sections = []
-        clauses = []
-        pending = {section_task, clause_task}
-        while pending:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for completed in done:
-                if completed is section_task:
-                    sections = completed.result()
-                    if pending:
-                        self._emit_progress(
-                            progress_callback,
-                            70,
-                            "section_reconstruction",
-                            f"Identified {len(sections)} sections. Clause tagging is still running.",
-                        )
-                elif completed is clause_task:
-                    clauses = completed.result()
-                    if pending:
-                        self._emit_progress(
-                            progress_callback,
-                            72,
-                            "clause_tagging",
-                            f"Identified {len(clauses)} key clauses. Section reconstruction is still running.",
-                        )
+        sections = await self.parser_agent.reconstruct_sections(extracted.pages)
         self._emit_progress(
             progress_callback,
-            78,
+            72,
+            "section_reconstruction",
+            f"Identified {len(sections)} grounded sections.",
+        )
+        self._emit_progress(
+            progress_callback,
+            76,
             "clause_tagging",
-            f"Identified {len(sections)} sections and {len(clauses)} key clauses.",
+            "Grounding key clauses to OCR blocks.",
+        )
+        clauses = await self.parser_agent.identify_clauses(extracted.pages, sections)
+        self._emit_progress(
+            progress_callback,
+            82,
+            "clause_tagging",
+            f"Identified {len(clauses)} grounded clauses.",
         )
         agent_steps.append(
             self._step(
@@ -165,7 +151,7 @@ class ContractAgent:
         )
 
         key_facts = await self.parser_agent.extract_key_facts(extracted.pages, clauses)
-        self._emit_progress(progress_callback, 86, "fact_extraction", f"Extracted {len(key_facts)} key facts.")
+        self._emit_progress(progress_callback, 88, "fact_extraction", f"Extracted {len(key_facts)} key facts.")
         agent_steps.append(
             self._step(
                 "step_006",
@@ -179,7 +165,7 @@ class ContractAgent:
         )
 
         self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
-        self._emit_progress(progress_callback, 90, "evidence_mapping", "Mapped extracted results back to source pages.")
+        self._emit_progress(progress_callback, 92, "evidence_mapping", "Mapped grounded results back to source pages.")
         agent_steps.append(
             self._step(
                 "step_007",
@@ -198,7 +184,7 @@ class ContractAgent:
             relations=relations,
             key_facts=key_facts,
         )
-        self._emit_progress(progress_callback, 95, "audit_focus_generation", f"Generated {len(audit_focuses)} audit focus items.")
+        self._emit_progress(progress_callback, 96, "audit_focus_generation", f"Generated {len(audit_focuses)} audit focus items.")
         self._bind_clause_audit_links(clauses, audit_focuses)
         agent_steps.append(
             self._step(

@@ -15,24 +15,26 @@ class EvidenceService:
         key_facts: list[KeyFact],
     ) -> None:
         for section in sections:
-            evidence = self._locate_text(
+            evidence = self._locate_evidence(
                 pages=pages,
                 target_text=f"{section.title} {section.summary}",
                 source_type="section",
                 source_id=section.id,
                 page_hint=section.page,
                 accent="cyan",
+                block_ids=section.blockIds,
             )
             section.evidenceId = evidence.id
 
         for clause in clauses:
-            evidence = self._locate_text(
+            evidence = self._locate_evidence(
                 pages=pages,
                 target_text=clause.rawText or clause.summary,
                 source_type="clause",
                 source_id=clause.id,
                 page_hint=clause.page,
                 accent="amber" if clause.needHumanReview else "cyan",
+                block_ids=clause.blockIds,
             )
             clause.evidenceId = evidence.id
 
@@ -49,6 +51,62 @@ class EvidenceService:
 
     def build_index(self, result: ContractAnalysisResult) -> dict[str, EvidenceRef]:
         return {evidence.id: evidence for page in result.pages for evidence in page.evidences}
+
+    def _locate_evidence(
+        self,
+        pages: list[ContractPage],
+        target_text: str,
+        source_type: str,
+        source_id: str,
+        page_hint: int,
+        accent: str,
+        block_ids: list[str] | None = None,
+    ) -> EvidenceRef:
+        grounded = self._locate_blocks(
+            pages=pages,
+            block_ids=block_ids or [],
+            source_type=source_type,
+            source_id=source_id,
+            accent=accent,
+        )
+        if grounded is not None:
+            return grounded
+        return self._locate_text(
+            pages=pages,
+            target_text=target_text,
+            source_type=source_type,
+            source_id=source_id,
+            page_hint=page_hint,
+            accent=accent,
+        )
+
+    def _locate_blocks(
+        self,
+        pages: list[ContractPage],
+        block_ids: list[str],
+        source_type: str,
+        source_id: str,
+        accent: str,
+    ) -> EvidenceRef | None:
+        if not block_ids:
+            return None
+        for page in pages:
+            matched = [block for block in page.blocks if block.id in block_ids]
+            if not matched:
+                continue
+            evidence = EvidenceRef(
+                id=f"ev_{source_id}",
+                page=page.page,
+                bbox=tuple(self._merge_bbox(matched)),
+                text="\n".join(block.text.strip() for block in matched if block.text.strip())[:1200],
+                sourceType=source_type,
+                sourceId=source_id,
+                accent=accent,
+            )
+            page.evidences = [item for item in page.evidences if item.id != evidence.id]
+            page.evidences.append(evidence)
+            return evidence
+        return None
 
     def _locate_text(
         self,
