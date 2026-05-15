@@ -118,7 +118,11 @@ class QwenService:
             raise RuntimeError(f"Qwen request failed: {exc}") from exc
         data = response.json()
         if self.settings.qwen_cache_enabled:
-            cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
         return data
 
     def _cache_path(self, payload: dict[str, Any]) -> Path:
