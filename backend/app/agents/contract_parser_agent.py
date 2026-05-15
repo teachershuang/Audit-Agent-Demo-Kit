@@ -134,15 +134,16 @@ class ContractParserAgent:
     async def _request_grounded_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
         payload = await self.qwen_service.chat_json(
             system_prompt=(
-                "You reconstruct the real section structure of a Chinese contract from OCR blocks. "
-                "Use only the supplied OCR blocks. Every section must cite supporting blockIds from the input. "
-                "Do not invent sections. Prefer top-level sections and materially meaningful subsections. "
-                "Keep blockIds on the representative page of the section whenever possible."
+                "你是中文合同结构识别专家。"
+                "请基于提供的 OCR blocks 还原合同章节。"
+                "只能使用输入中已经给出的 blockIds，不能编造章节，不能输出英文摘要。"
+                "每个章节必须输出中文标题、中文摘要、页码、置信度和 blockIds。"
+                "优先输出主章节和有业务意义的小节。"
             ),
             user_prompt=(
                 f"OCR pages with block ids:\n{json.dumps(self._grounding_pages_payload(pages), ensure_ascii=False)}\n"
-                "Return a JSON object with a top-level `sections` array. "
-                "Each section must include title, level, page, summary, confidence, and blockIds."
+                "返回 JSON 对象，顶层字段为 `sections`。"
+                "每个 section 必须包含 title、level、page、summary、confidence、blockIds。"
             ),
             schema={
                 "type": "object",
@@ -186,17 +187,17 @@ class ContractParserAgent:
         ]
         payload = await self.qwen_service.chat_json(
             system_prompt=(
-                "You identify key audit and risk clauses in a Chinese contract from OCR blocks. "
-                f"Only use these labels: {', '.join(CLAUSE_LABELS)}. "
-                "Every clause must cite supporting blockIds from the OCR input. "
-                "Do not invent clauses that are not supported by the source blocks. "
-                "Use a compact set of representative blockIds from one page when possible."
+                "你是审计风控场景下的中文合同条款识别专家。"
+                f"可用标签仅限：{', '.join(CLAUSE_LABELS)}。"
+                "必须严格基于 OCR blocks 识别条款，不能编造不存在的内容。"
+                "每个条款必须输出中文标题、中文摘要、原文、页码、置信度、needHumanReview 和 blockIds。"
+                "优先给出单页内最能代表该条款的 blockIds，避免重复输出相同 blockId。"
             ),
             user_prompt=(
                 f"OCR pages with block ids:\n{json.dumps(self._grounding_pages_payload(pages), ensure_ascii=False)}\n"
                 f"Recognized sections:\n{json.dumps(section_payload, ensure_ascii=False)}\n"
-                "Return a JSON object with a top-level `clauses` array. "
-                "Each clause must include label, title, summary, rawText, page, confidence, needHumanReview, and blockIds."
+                "返回 JSON 对象，顶层字段为 `clauses`。"
+                "每个 clause 必须包含 label、title、summary、rawText、page、confidence、needHumanReview、blockIds。"
             ),
             schema={
                 "type": "object",
@@ -504,10 +505,25 @@ class ContractParserAgent:
             or item.get("block_ids")
         )
         if isinstance(candidate, list):
-            return [str(value).strip() for value in candidate if str(value).strip()]
+            return ContractParserAgent._unique_preserve_order(
+                [str(value).strip() for value in candidate if str(value).strip()]
+            )
         if isinstance(candidate, str):
-            return [part.strip() for part in re.split(r"[,;\s]+", candidate) if part.strip()]
+            return ContractParserAgent._unique_preserve_order(
+                [part.strip() for part in re.split(r"[,;\s]+", candidate) if part.strip()]
+            )
         return []
+
+    @staticmethod
+    def _unique_preserve_order(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            unique.append(value)
+        return unique
 
     @staticmethod
     def _resolve_blocks(

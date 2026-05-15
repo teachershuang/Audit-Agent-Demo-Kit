@@ -295,7 +295,7 @@ class OCRService:
 
         if lines:
             pipelines.add("paddle_ocr")
-            blocks = self._group_lines_by_layout(lines)
+            blocks = self._group_lines_by_layout(lines, candidate.page_number)
             if self._should_use_vl_enhancement(lines):
                 vl_paragraphs = await self._try_fetch_vl_paragraphs(
                     candidate=candidate,
@@ -303,7 +303,11 @@ class OCRService:
                 )
                 if vl_paragraphs:
                     pipelines.add("qwen_vl_enhance")
-                    semantic_blocks = await self._try_align_paragraphs_to_lines(lines, vl_paragraphs)
+                    semantic_blocks = await self._try_align_paragraphs_to_lines(
+                        lines,
+                        vl_paragraphs,
+                        candidate.page_number,
+                    )
                     if semantic_blocks:
                         pipelines.add("qwen_text_anchor")
                         blocks = semantic_blocks
@@ -358,6 +362,7 @@ class OCRService:
         self,
         lines: list[PaddleOCRLine],
         paragraphs: list[str],
+        page_number: int,
     ) -> list[DocumentBlock]:
         if not paragraphs or not self.qwen_service.is_available:
             return []
@@ -402,7 +407,13 @@ class OCRService:
                 continue
             selected_lines = [lines[idx] for idx in ordered_indices]
             block_text = " ".join(line.text for line in selected_lines).strip()
-            blocks.append(self._merge_lines_into_block(selected_lines, f"hybrid_{index:03d}", block_text))
+            blocks.append(
+                self._merge_lines_into_block(
+                    selected_lines,
+                    f"hybrid_{page_number:03d}_{index:03d}",
+                    block_text,
+                )
+            )
             seen_ids.update(line_ids)
 
         if not blocks:
@@ -446,7 +457,12 @@ class OCRService:
             paragraphs = self._normalize_ocr_paragraphs(payload)
             if not paragraphs:
                 return []
-            return self._build_flow_blocks(paragraphs=paragraphs, width=candidate.width, height=candidate.height)
+            return self._build_flow_blocks(
+                paragraphs=paragraphs,
+                width=candidate.width,
+                height=candidate.height,
+                page_number=candidate.page_number,
+            )
         except Exception as exc:
             app_logger.warning(
                 json_dumps(
@@ -472,7 +488,7 @@ class OCRService:
         return severe_quality_drop or low_confidence_fragmentation or dense_unstable_layout
 
     @staticmethod
-    def _group_lines_by_layout(lines: list[PaddleOCRLine]) -> list[DocumentBlock]:
+    def _group_lines_by_layout(lines: list[PaddleOCRLine], page_number: int) -> list[DocumentBlock]:
         if not lines:
             return []
         blocks: list[DocumentBlock] = []
@@ -486,11 +502,15 @@ class OCRService:
             if gap <= max(prev.height, current.height) * 1.2 and similar_indent:
                 cluster.append(current)
                 continue
-            blocks.append(OCRService._merge_lines_into_block(cluster, f"paddle_{block_index:03d}"))
+            blocks.append(
+                OCRService._merge_lines_into_block(cluster, f"paddle_{page_number:03d}_{block_index:03d}")
+            )
             block_index += 1
             cluster = [current]
         if cluster:
-            blocks.append(OCRService._merge_lines_into_block(cluster, f"paddle_{block_index:03d}"))
+            blocks.append(
+                OCRService._merge_lines_into_block(cluster, f"paddle_{page_number:03d}_{block_index:03d}")
+            )
         return blocks
 
     @staticmethod
@@ -623,7 +643,7 @@ class OCRService:
         return [full_text]
 
     @staticmethod
-    def _build_flow_blocks(paragraphs: list[str], width: int, height: int) -> list[DocumentBlock]:
+    def _build_flow_blocks(paragraphs: list[str], width: int, height: int, page_number: int) -> list[DocumentBlock]:
         usable_paragraphs = [item for item in paragraphs if item]
         if not usable_paragraphs:
             return []
@@ -641,7 +661,7 @@ class OCRService:
             block_height = max(line_height, int(line_height * unit_count))
             blocks.append(
                 DocumentBlock(
-                    id=f"vl_{index:03d}",
+                    id=f"vl_{page_number:03d}_{index:03d}",
                     text=text,
                     x=horizontal_padding,
                     y=min(current_y, max(top_padding, height - block_height - top_padding)),
@@ -747,6 +767,7 @@ class OCRService:
             pages: list[ContractPage] = []
             for raw_page in payload.get("pages", []):
                 page = ContractPage.model_validate(raw_page)
+                page.blocks = self._normalize_cached_block_ids(page)
                 page.imageUrl = f"/api/contracts/{task_id}/pages/{page.page}/image"
                 pages.append(page)
             return ExtractedDocument(
@@ -766,6 +787,31 @@ class OCRService:
                 )
             )
             return None
+
+    @staticmethod
+    def _normalize_cached_block_ids(page: ContractPage) -> list[DocumentBlock]:
+        normalized: list[DocumentBlock] = []
+        for index, block in enumerate(page.blocks, start=1):
+            block_id = block.id
+            if block_id.startswith(("paddle_", "hybrid_", "vl_")) and f"_{page.page:03d}_" not in block_id:
+                if block_id.startswith("paddle_"):
+                    block_id = f"paddle_{page.page:03d}_{index:03d}"
+                elif block_id.startswith("hybrid_"):
+                    block_id = f"hybrid_{page.page:03d}_{index:03d}"
+                elif block_id.startswith("vl_"):
+                    block_id = f"vl_{page.page:03d}_{index:03d}"
+            normalized.append(
+                DocumentBlock(
+                    id=block_id,
+                    text=block.text,
+                    x=block.x,
+                    y=block.y,
+                    width=block.width,
+                    height=block.height,
+                    emphasis=block.emphasis,
+                )
+            )
+        return normalized
 
     def _persist_cache(
         self,
