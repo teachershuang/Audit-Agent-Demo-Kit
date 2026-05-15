@@ -22,7 +22,16 @@ export function AuditFocusCard({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/60">审计关注方向</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/60">审计关注方向</p>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+              {focus.focusSource === "relation_config"
+                ? "用户配置触发"
+                : focus.focusSource === "hybrid"
+                  ? "配置 + Agent"
+                  : "Agent 发现"}
+            </span>
+          </div>
           <h3 className="mt-1 text-base font-semibold text-white">{focus.title}</h3>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -50,6 +59,9 @@ export function AuditFocusCard({
         </div>
       </div>
       <p className="mt-4 text-sm leading-7 text-cyan-100/90">{focus.humanReviewSuggestion}</p>
+      {focus.matchedRelationIds.length ? (
+        <div className="mt-3 text-xs text-slate-400">关联关系配置 {focus.matchedRelationIds.length}</div>
+      ) : null}
     </button>
   );
 }

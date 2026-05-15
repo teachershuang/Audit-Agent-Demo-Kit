@@ -47,7 +47,7 @@ confidence_service = ConfidenceService()
 planner = Planner()
 parser_agent = ContractParserAgent(qwen_service=qwen_service, settings=settings)
 audit_focus_agent = AuditFocusAgent(qwen_service=qwen_service)
-verification_agent = VerificationAgent()
+verification_agent = VerificationAgent(qwen_service=qwen_service)
 relation_config_service = RelationConfigService(store=store)
 contract_agent = ContractAgent(
     document_service=document_service,

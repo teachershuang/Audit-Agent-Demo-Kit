@@ -4,6 +4,8 @@ export type VerificationStatus = "pass" | "warning" | "fail" | "external_pending
 export interface AuditFocus {
   id: string;
   title: string;
+  focusSource: "relation_config" | "agent_discovered" | "hybrid";
+  matchedRelationIds: string[];
   riskLevel: RiskLevel;
   reason: string;
   evidenceClauseIds: string[];

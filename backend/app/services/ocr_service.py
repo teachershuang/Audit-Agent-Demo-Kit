@@ -65,11 +65,11 @@ class OCRService:
         cache_entry_dir = self._resolve_cache_dir(preparation=preparation, output_root=output_root)
         cached_document = self._load_cached_document(task_id=task_id, cache_entry_dir=cache_entry_dir, page_dir=page_dir)
         if cached_document is not None:
-            self._emit_progress(progress_callback, 20, "ocr_cache_hit", "Loaded OCR result from cache.")
+            self._emit_progress(progress_callback, 20, "ocr_cache_hit", "已命中 OCR 缓存，正在复用页级文本与坐标结果。")
             return cached_document
 
         if preparation.use_builtin_example:
-            self._emit_progress(progress_callback, 16, "document_prepared", "Example contract is ready.")
+            self._emit_progress(progress_callback, 16, "document_prepared", "示例合同已准备完成，开始解析。")
             return self._build_example_document(task_id=task_id, image_path=page_dir / "page_001.png")
 
         if preparation.file_type == "pdf" and preparation.source_path:
@@ -112,7 +112,7 @@ class OCRService:
                 progress_callback,
                 12,
                 "document_rendering",
-                f"Rendering {total_pages} pages and checking embedded text.",
+                f"正在渲染 {total_pages} 页合同，并检查是否存在可直接提取的内嵌文本。",
             )
             for page_index in range(total_pages):
                 page = doc.load_page(page_index)
@@ -176,7 +176,7 @@ class OCRService:
             progress_callback,
             58,
             "document_extracted",
-            f"Document text extraction finished for {len(pages)} pages.",
+            f"文档抽取完成，共生成 {len(pages)} 页可定位文本。",
         )
         return ExtractedDocument(pages=pages, full_text=full_text, pipeline=pipeline, warnings=warnings)
 
@@ -209,7 +209,7 @@ class OCRService:
         pipelines.update(page_pipeline)
         page.blocks = blocks
         page.title = self._derive_page_title(blocks, fallback="Page 1")
-        self._emit_progress(progress_callback, 58, "document_extracted", "Image OCR finished.")
+        self._emit_progress(progress_callback, 58, "document_extracted", "图片合同 OCR 已完成。")
         return ExtractedDocument(
             pages=[page],
             full_text="\n".join(block.text for block in blocks),
@@ -233,7 +233,7 @@ class OCRService:
                 progress_callback,
                 18,
                 "paddle_ocr",
-                f"Running PaddleOCR in paddle_test for {len(ocr_candidates)} scanned pages.",
+                f"正在使用 PaddleOCR 处理 {len(ocr_candidates)} 页扫描页，提取基础文本与坐标。",
             )
             paddle_results = await self.paddle_ocr_service.extract_pages(
                 [
@@ -267,10 +267,9 @@ class OCRService:
                 completed_pages += 1
                 progress_value = 18 + int((completed_pages / max(total_pages, 1)) * 34)
                 message = (
-                    f"Completed scanned page {candidate.page_number}/{len(page_map)}. "
-                    f"Finished {completed_pages}/{total_pages} scanned pages."
+                    f"已完成第 {candidate.page_number} 页扫描识别，当前已处理 {completed_pages}/{total_pages} 页。"
                     if not page_warnings
-                    else f"{page_warnings[0]}. Finished {completed_pages}/{total_pages} scanned pages."
+                    else f"{page_warnings[0]} 当前已处理 {completed_pages}/{total_pages} 页。"
                 )
                 self._emit_progress(progress_callback, progress_value, "ocr_running", message)
 
@@ -293,25 +292,37 @@ class OCRService:
             lines = extracted.get(candidate.page_number, [])
         lines = lines or []
 
+        vl_paragraphs = await self._try_fetch_vl_paragraphs(
+            candidate=candidate,
+            page_dir=page_dir,
+        )
+        if vl_paragraphs:
+            pipelines.add("qwen_vl_semantic")
+
         if lines:
             pipelines.add("paddle_ocr")
-            blocks = self._group_lines_by_layout(lines, candidate.page_number)
-            if self._should_use_vl_enhancement(lines):
-                vl_paragraphs = await self._try_fetch_vl_paragraphs(
-                    candidate=candidate,
-                    page_dir=page_dir,
+            if vl_paragraphs:
+                semantic_blocks = await self._try_align_paragraphs_to_lines(
+                    lines=lines,
+                    paragraphs=vl_paragraphs,
+                    page_number=candidate.page_number,
                 )
-                if vl_paragraphs:
-                    pipelines.add("qwen_vl_enhance")
-                    semantic_blocks = await self._try_align_paragraphs_to_lines(
-                        lines,
-                        vl_paragraphs,
-                        candidate.page_number,
-                    )
-                    if semantic_blocks:
-                        pipelines.add("qwen_text_anchor")
-                        blocks = semantic_blocks
-            return warnings, pipelines, blocks
+                if semantic_blocks:
+                    pipelines.add("qwen_text_anchor")
+                    return warnings, pipelines, semantic_blocks
+            return warnings, pipelines, self._group_lines_by_layout(lines, candidate.page_number)
+
+        if vl_paragraphs:
+            vl_blocks = self._build_flow_blocks(
+                paragraphs=vl_paragraphs,
+                width=candidate.width,
+                height=candidate.height,
+                page_number=candidate.page_number,
+            )
+            if vl_blocks:
+                pipelines.add("qwen_vl_only")
+                warnings.append(f"Page {candidate.page_number} used VL-only OCR fallback")
+                return warnings, pipelines, vl_blocks
 
         vl_blocks = await self._try_build_vl_only_blocks(candidate=candidate, page_dir=page_dir)
         if vl_blocks:
@@ -338,12 +349,14 @@ class OCRService:
             )
             payload = await self.qwen_service.vision_json(
                 prompt=(
-                    "You are reading a scanned Chinese contract page. Return JSON with `full_text` and `paragraphs`. "
-                    "`paragraphs` must be an ordered array of paragraph strings based only on visible text."
+                    "你正在阅读一页中文扫描合同。"
+                    "请只做 OCR 与阅读顺序还原，不要总结，不要解释，不要翻译。"
+                    "返回 JSON，对象包含 `full_text` 和 `paragraphs`。"
+                    "`paragraphs` 必须是按自然阅读顺序排列的段落数组，只能基于图片中可见文字。"
                 ),
                 image_path=reduced_path,
                 schema={"type": "object"},
-                timeout=90,
+                timeout=120,
             )
             return self._normalize_ocr_paragraphs(payload)
         except Exception as exc:
@@ -372,14 +385,15 @@ class OCRService:
         try:
             payload = await self.qwen_service.chat_json(
                 system_prompt=(
-                    "You map semantic paragraphs to ordered OCR lines. "
-                    "Each paragraph must map only to contiguous line ids from the provided OCR lines. "
-                    "Do not invent text or line ids."
+                    "你负责把合同语义段落回锚到 OCR 行。"
+                    "每个段落只能映射到输入里真实存在的连续 lineIds。"
+                    "不要编造 lineIds，不要输出英文。"
                 ),
                 user_prompt=(
                     f"OCR lines: {line_payload}\n"
                     f"Semantic paragraphs: {paragraph_payload}\n"
-                    "Return JSON with `groups`, each item containing `paragraph` and `lineIds`."
+                    "请返回 JSON 对象，顶层字段为 `groups`。"
+                    "每个 group 包含 `paragraph` 和 `lineIds`。"
                 ),
                 schema={"type": "object"},
             )

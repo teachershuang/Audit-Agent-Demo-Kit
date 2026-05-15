@@ -31,6 +31,8 @@ export interface ContractSection {
 export interface ClauseTag {
   id: string;
   label: string;
+  coreLabel: string;
+  labelSource: "core" | "agent_discovered" | "user_configured";
   title: string;
   summary: string;
   rawText: string;
@@ -38,6 +40,7 @@ export interface ClauseTag {
   confidence: number;
   evidenceId: string;
   needHumanReview: boolean;
+  discoveryReason?: string | null;
   relatedAuditFocusIds: string[];
 }
 

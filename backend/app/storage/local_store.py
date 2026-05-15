@@ -52,7 +52,7 @@ class LocalStore:
             confidenceOverview={"overall": 0.0, "sections": 0.0, "clauses": 0.0, "audit": 0.0, "warnings": 0},
             progressPercent=4,
             currentStage="file_received",
-            stageDetail="File received and waiting for analysis.",
+            stageDetail="文件已接收，等待开始分析。",
             elapsedMs=0,
         )
         record = TaskRecord(
@@ -80,7 +80,7 @@ class LocalStore:
         result.task.elapsedMs = int((perf_counter() - record.started_at_perf) * 1000)
         result.task.progressPercent = 100
         result.task.currentStage = "completed"
-        result.task.stageDetail = "Analysis result is ready."
+        result.task.stageDetail = "分析结果已生成，可查看章节、条款、关注事项与证据链。"
         record.task = result.task
         record.result = result
         record.audit_focuses = audit_focuses

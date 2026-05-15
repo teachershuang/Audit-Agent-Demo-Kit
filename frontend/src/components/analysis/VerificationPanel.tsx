@@ -6,25 +6,25 @@ const statusMap = {
   warning: "建议复核",
   fail: "需要补齐",
   external_pending: "待外部核验",
-};
+} as const;
 
 const statusTone = {
   pass: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
   warning: "border-amber-400/30 bg-amber-400/10 text-amber-100",
   fail: "border-rose-400/30 bg-rose-400/10 text-rose-100",
   external_pending: "border-cyan-400/30 bg-cyan-400/10 text-cyan-100",
-};
+} as const;
 
 function buildUserSummary(item: VerificationItem) {
   switch (item.status) {
     case "pass":
-      return "系统已找到足够依据，这一项当前可以继续向下查看。";
+      return "系统已经找到了足够支撑当前判断的证据，这一项可以继续向下查看。";
     case "warning":
       return "系统识别到了线索，但完整性或一致性还不够稳，建议人工复核。";
     case "fail":
       return "当前没有找到足够支撑内容，建议补充合同条款或重新核验。";
     case "external_pending":
-      return "仅靠合同文本无法确认，需要接入外部数据或业务系统继续判断。";
+      return "仅依赖合同文本无法确认，需要接入外部数据或业务系统继续判断。";
     default:
       return item.description;
   }
@@ -62,12 +62,12 @@ export function VerificationPanel({
         <div className="rounded-[22px] border border-amber-400/18 bg-amber-400/8 p-4">
           <div className="text-[11px] uppercase tracking-[0.22em] text-amber-100/70">建议复核</div>
           <div className="mt-2 text-2xl font-semibold text-white">{warningCount}</div>
-          <div className="mt-1 text-sm text-slate-300">有识别结果，但还不适合直接采用</div>
+          <div className="mt-1 text-sm text-slate-300">有识别结果，但不建议直接当成最终依据</div>
         </div>
         <div className="rounded-[22px] border border-cyan-400/18 bg-cyan-400/8 p-4">
           <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-100/70">待外部核验</div>
           <div className="mt-2 text-2xl font-semibold text-white">{pendingCount}</div>
-          <div className="mt-1 text-sm text-slate-300">需要企业关系、付款或审批等外部信息</div>
+          <div className="mt-1 text-sm text-slate-300">需要企业关系、付款、审批或主数据等外部信息</div>
         </div>
       </section>
 
@@ -76,7 +76,7 @@ export function VerificationPanel({
           const relatedLabels = item.relatedClauseIds
             .map((id) => clauseMap.get(id))
             .filter(Boolean)
-            .map((clause) => `${clause?.label} · ${clause?.title}`);
+            .map((clause) => `${clause?.label} / ${clause?.title}`);
 
           return (
             <article

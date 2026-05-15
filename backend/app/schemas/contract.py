@@ -56,6 +56,8 @@ class ContractSection(BaseModel):
 class ClauseTag(BaseModel):
     id: str
     label: str
+    coreLabel: str = "其他重要条款"
+    labelSource: str = "core"
     title: str
     summary: str
     rawText: str
@@ -64,6 +66,7 @@ class ClauseTag(BaseModel):
     blockIds: list[str] = Field(default_factory=list)
     evidenceId: str
     needHumanReview: bool = False
+    discoveryReason: str | None = None
     relatedAuditFocusIds: list[str] = Field(default_factory=list)
 
 

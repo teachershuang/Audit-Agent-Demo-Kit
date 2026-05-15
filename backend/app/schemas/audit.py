@@ -22,6 +22,8 @@ class VerificationStatus(str, Enum):
 class AuditFocus(BaseModel):
     id: str
     title: str
+    focusSource: str = "agent_discovered"
+    matchedRelationIds: list[str] = Field(default_factory=list)
     riskLevel: RiskLevel
     reason: str
     evidenceClauseIds: list[str] = Field(default_factory=list)

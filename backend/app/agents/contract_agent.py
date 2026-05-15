@@ -63,7 +63,7 @@ class ContractAgent:
             use_builtin_example=use_builtin_example,
         )
         plan = self.planner.build_plan(preparation)
-        self._emit_progress(progress_callback, 6, "document_prepared", f"Prepared {preparation.file_type} document.")
+        self._emit_progress(progress_callback, 6, "document_prepared", f"已准备 {preparation.file_type} 文档，开始进入解析流程。")
 
         agent_steps: list[AgentStep] = [
             self._step("step_001", "接收上传文件", AgentStepStatus.SUCCESS, 60, task.fileName, f"任务 {task.taskId}", "upload_handler"),
@@ -104,27 +104,27 @@ class ContractAgent:
             progress_callback,
             60,
             "section_reconstruction",
-            "Grounding contract sections to OCR blocks.",
+            "正在根据 OCR blocks 重建合同章节并建立证据对应。",
         )
         sections = await self.parser_agent.reconstruct_sections(extracted.pages)
         self._emit_progress(
             progress_callback,
             72,
             "section_reconstruction",
-            f"Identified {len(sections)} grounded sections.",
+            f"已识别 {len(sections)} 个章节，并完成章节级证据定位。",
         )
         self._emit_progress(
             progress_callback,
             76,
             "clause_tagging",
-            "Grounding key clauses to OCR blocks.",
+            "正在识别关键条款，并将条款回链到原文证据块。",
         )
         clauses = await self.parser_agent.identify_clauses(extracted.pages, sections)
         self._emit_progress(
             progress_callback,
             82,
             "clause_tagging",
-            f"Identified {len(clauses)} grounded clauses.",
+            f"已识别 {len(clauses)} 条关键条款，并建立条款证据映射。",
         )
         agent_steps.append(
             self._step(
@@ -151,7 +151,7 @@ class ContractAgent:
         )
 
         key_facts = await self.parser_agent.extract_key_facts(extracted.pages, clauses)
-        self._emit_progress(progress_callback, 88, "fact_extraction", f"Extracted {len(key_facts)} key facts.")
+        self._emit_progress(progress_callback, 88, "fact_extraction", f"已抽取 {len(key_facts)} 项关键信息。")
         agent_steps.append(
             self._step(
                 "step_006",
@@ -165,7 +165,7 @@ class ContractAgent:
         )
 
         self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
-        self._emit_progress(progress_callback, 92, "evidence_mapping", "Mapped grounded results back to source pages.")
+        self._emit_progress(progress_callback, 92, "evidence_mapping", "正在把章节、条款和关键信息统一映射回合同原文。")
         agent_steps.append(
             self._step(
                 "step_007",
@@ -184,7 +184,7 @@ class ContractAgent:
             relations=relations,
             key_facts=key_facts,
         )
-        self._emit_progress(progress_callback, 96, "audit_focus_generation", f"Generated {len(audit_focuses)} audit focus items.")
+        self._emit_progress(progress_callback, 96, "audit_focus_generation", f"已生成 {len(audit_focuses)} 项审计关注方向。")
         self._bind_clause_audit_links(clauses, audit_focuses)
         agent_steps.append(
             self._step(
@@ -198,12 +198,12 @@ class ContractAgent:
             )
         )
 
-        verification_items = self.verification_agent.verify(
+        verification_items = await self.verification_agent.verify(
             sections=sections,
             clauses=clauses,
             audit_focuses=audit_focuses,
         )
-        self._emit_progress(progress_callback, 98, "verification", f"Built {len(verification_items)} verification records.")
+        self._emit_progress(progress_callback, 98, "verification", f"已整理 {len(verification_items)} 条校验与证据链说明。")
         agent_steps.append(
             self._step(
                 "step_009",

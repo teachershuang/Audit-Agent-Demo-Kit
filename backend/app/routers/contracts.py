@@ -106,7 +106,7 @@ def get_contract_router(store: LocalStore, agent):
             status=TaskStatus.PROCESSING,
             progress_percent=8,
             current_stage="analysis_started",
-            stage_detail="Analysis task started.",
+            stage_detail="分析任务已启动，正在准备文档和执行链路。",
         )
 
         def progress_callback(progress_percent: int, current_stage: str, stage_detail: str) -> None:
