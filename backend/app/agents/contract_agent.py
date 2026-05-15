@@ -262,4 +262,6 @@ class ContractAgent:
             inputSummary=input_summary,
             outputSummary=output_summary,
             tool=tool,
+            success=status in {AgentStepStatus.SUCCESS, AgentStepStatus.WARNING},
+            errorMessage=None,
         )
