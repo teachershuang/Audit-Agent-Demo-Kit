@@ -39,7 +39,7 @@ export function EvidenceHighlight({
     >
       {active ? (
         <span className="absolute -top-7 left-0 rounded-full border border-white/10 bg-slate-950/85 px-2.5 py-1 text-[10px] tracking-[0.18em] text-white uppercase">
-          证据定位
+          {evidence.segmentCount > 1 ? `证据片段 ${evidence.segmentIndex + 1}/${evidence.segmentCount}` : "证据定位"}
         </span>
       ) : null}
     </button>

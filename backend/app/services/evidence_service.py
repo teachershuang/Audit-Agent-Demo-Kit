@@ -50,7 +50,13 @@ class EvidenceService:
             fact.evidenceId = evidence.id
 
     def build_index(self, result: ContractAnalysisResult) -> dict[str, EvidenceRef]:
-        return {evidence.id: evidence for page in result.pages for evidence in page.evidences}
+        index: dict[str, EvidenceRef] = {}
+        for page in result.pages:
+            for evidence in page.evidences:
+                current = index.get(evidence.id)
+                if current is None or evidence.isPrimary:
+                    index[evidence.id] = evidence
+        return index
 
     def _locate_evidence(
         self,
@@ -67,6 +73,7 @@ class EvidenceService:
             block_ids=block_ids or [],
             source_type=source_type,
             source_id=source_id,
+            page_hint=page_hint,
             accent=accent,
         )
         if grounded is not None:
@@ -86,27 +93,63 @@ class EvidenceService:
         block_ids: list[str],
         source_type: str,
         source_id: str,
+        page_hint: int,
         accent: str,
     ) -> EvidenceRef | None:
         if not block_ids:
             return None
+        order = {block_id: index for index, block_id in enumerate(block_ids)}
+        resolved: list[tuple[ContractPage, object]] = []
         for page in pages:
-            matched = [block for block in page.blocks if block.id in block_ids]
-            if not matched:
+            for block in page.blocks:
+                if block.id in order:
+                    resolved.append((page, block))
+        if not resolved:
+            return None
+        resolved.sort(key=lambda item: order[item[1].id])
+
+        segments: list[list[tuple[ContractPage, object]]] = []
+        current_segment: list[tuple[ContractPage, object]] = []
+        for item in resolved:
+            if not current_segment:
+                current_segment = [item]
                 continue
+            previous_page, previous_block = current_segment[-1]
+            current_page, current_block = item
+            if self._should_split_segment(previous_page, previous_block, current_page, current_block):
+                segments.append(current_segment)
+                current_segment = [item]
+            else:
+                current_segment.append(item)
+        if current_segment:
+            segments.append(current_segment)
+
+        evidence_id = f"ev_{source_id}"
+        for page in pages:
+            page.evidences = [item for item in page.evidences if item.id != evidence_id]
+
+        primary_index = self._pick_primary_segment_index(segments, page_hint)
+        primary_evidence: EvidenceRef | None = None
+        total = len(segments)
+        for index, segment in enumerate(segments):
+            page = segment[0][0]
+            blocks = [block for _, block in segment]
             evidence = EvidenceRef(
-                id=f"ev_{source_id}",
+                id=evidence_id,
                 page=page.page,
-                bbox=tuple(self._merge_bbox(matched)),
-                text="\n".join(block.text.strip() for block in matched if block.text.strip())[:1200],
+                bbox=tuple(self._merge_bbox(blocks)),
+                text="\n".join(block.text.strip() for block in blocks if block.text.strip())[:1200],
                 sourceType=source_type,
                 sourceId=source_id,
+                segmentIndex=index,
+                segmentCount=total,
+                isPrimary=index == primary_index,
                 accent=accent,
             )
-            page.evidences = [item for item in page.evidences if item.id != evidence.id]
             page.evidences.append(evidence)
-            return evidence
-        return None
+            if evidence.isPrimary:
+                primary_evidence = evidence
+        return primary_evidence
 
     def _locate_text(
         self,
@@ -147,6 +190,9 @@ class EvidenceService:
             text=best_text,
             sourceType=source_type,
             sourceId=source_id,
+            segmentIndex=0,
+            segmentCount=1,
+            isPrimary=True,
             accent=accent,
         )
         best_page.evidences = [item for item in best_page.evidences if item.id != evidence.id]
@@ -160,6 +206,37 @@ class EvidenceService:
         max_x = max(block.x + block.width for block in blocks)
         max_y = max(block.y + (block.height or 24) for block in blocks)
         return [min_x, min_y, max_x - min_x, max_y - min_y]
+
+    @staticmethod
+    def _should_split_segment(previous_page, previous_block, current_page, current_block) -> bool:
+        if previous_page.page != current_page.page:
+            return True
+        previous_bottom = previous_block.y + (previous_block.height or 24)
+        current_top = current_block.y
+        vertical_gap = current_top - previous_bottom
+        horizontal_shift = abs(current_block.x - previous_block.x)
+        tall_reference = max(previous_block.height or 24, current_block.height or 24)
+        if vertical_gap > tall_reference * 2.6:
+            return True
+        if vertical_gap > tall_reference * 1.4 and horizontal_shift > max(previous_block.width, current_block.width) * 0.35:
+            return True
+        return False
+
+    @staticmethod
+    def _pick_primary_segment_index(segments, page_hint: int) -> int:
+        best_index = 0
+        best_score = float("-inf")
+        for index, segment in enumerate(segments):
+            page = segment[0][0]
+            blocks = [block for _, block in segment]
+            text_len = sum(len((block.text or "").strip()) for block in blocks)
+            score = text_len + len(blocks) * 20
+            if page.page == page_hint:
+                score += 200
+            if score > best_score:
+                best_score = score
+                best_index = index
+        return best_index
 
     @staticmethod
     def _normalize(text: str) -> str:

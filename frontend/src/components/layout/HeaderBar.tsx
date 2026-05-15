@@ -44,9 +44,7 @@ export function HeaderBar({
               合同结构、关键条款、证据定位与审计关注事项统一呈现。
             </p>
             {task?.stageDetail ? (
-              <p className="mt-2 text-xs text-cyan-100/80">
-                当前阶段：{task.stageDetail}
-              </p>
+              <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p>
             ) : null}
           </div>
         </div>

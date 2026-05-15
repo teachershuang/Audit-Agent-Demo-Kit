@@ -33,12 +33,22 @@ export function ContractViewer({
     }
   }, [activePage]);
 
+  const allEvidences = useMemo(() => pages.flatMap((page) => page.evidences), [pages]);
   const activeEvidence = useMemo(
     () =>
-      pages
-        .flatMap((page) => page.evidences)
-        .find((evidence) => evidence.id === selectedEvidenceId) ?? null,
-    [pages, selectedEvidenceId],
+      allEvidences.find((evidence) => evidence.id === selectedEvidenceId && evidence.isPrimary) ??
+      allEvidences.find((evidence) => evidence.id === selectedEvidenceId) ??
+      null,
+    [allEvidences, selectedEvidenceId],
+  );
+  const activeEvidenceSegments = useMemo(
+    () =>
+      activeEvidence
+        ? allEvidences
+            .filter((evidence) => evidence.id === activeEvidence.id)
+            .sort((left, right) => left.segmentIndex - right.segmentIndex)
+        : [],
+    [activeEvidence, allEvidences],
   );
 
   const apiBaseUrl = getApiBaseUrlSync();
@@ -86,9 +96,14 @@ export function ContractViewer({
         >
           {activeEvidence ? (
             <div className="mb-4 rounded-2xl border border-cyan-400/18 bg-cyan-400/[0.08] px-4 py-3 text-sm text-cyan-50">
-              当前高亮证据：第 {activeEvidence.page} 页，定位到“{activeEvidence.text.slice(0, 42)}”
+              {activeEvidenceSegments.length > 1
+                ? `当前高亮证据共 ${activeEvidenceSegments.length} 个片段，覆盖第 ${[
+                    ...new Set(activeEvidenceSegments.map((item) => item.page)),
+                  ].join("、")} 页；当前代表片段位于第 ${activeEvidence.page} 页。`
+                : `当前高亮证据：第 ${activeEvidence.page} 页，定位到“${activeEvidence.text.slice(0, 42)}”`}
             </div>
           ) : null}
+
           <div className="mx-auto flex max-w-[980px] flex-col gap-6">
             {pages.map((page) => {
               const scale = zoom;
@@ -110,15 +125,13 @@ export function ContractViewer({
                 >
                   <div className="mb-3 flex items-center justify-between">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/60">
-                        Page {page.page}
-                      </p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/60">Page {page.page}</p>
                       <p className="mt-1 text-sm text-slate-200">{page.title}</p>
                     </div>
-                    {activeEvidence?.page === page.page ? (
+                    {activeEvidenceSegments.some((evidence) => evidence.page === page.page) ? (
                       <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/24 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100">
                         <SearchCheck className="h-3.5 w-3.5" />
-                        当前证据已定位
+                        当前证据页
                       </div>
                     ) : null}
                   </div>
@@ -156,7 +169,7 @@ export function ContractViewer({
 
                     {page.evidences.map((evidence) => (
                       <EvidenceHighlight
-                        key={evidence.id}
+                        key={`${evidence.id}-${page.page}-${evidence.segmentIndex}`}
                         evidence={evidence}
                         scale={scale}
                         active={selectedEvidenceId === evidence.id}

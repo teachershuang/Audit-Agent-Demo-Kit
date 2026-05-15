@@ -19,6 +19,9 @@ class EvidenceRef(BaseModel):
     text: str
     sourceType: str
     sourceId: str
+    segmentIndex: int = 0
+    segmentCount: int = 1
+    isPrimary: bool = True
     accent: str = "cyan"
 
 

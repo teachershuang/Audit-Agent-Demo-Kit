@@ -52,7 +52,7 @@ function App() {
   const leftPanel = !result ? (
     isBusy ? (
       <LoadingState
-        label={task?.currentStage === "ocr_running" ? "正在识别扫描页文本..." : "正在启动解析任务..."}
+        label={task?.currentStage === "ocr_running" ? "正在识别扫描页文本..." : "正在启动分析任务..."}
         detail={task?.stageDetail ?? "正在准备文档并调用解析链路。"}
         progress={task?.progressPercent ?? 0}
       />
@@ -60,8 +60,11 @@ function App() {
       <EmptyState
         title="上传合同开始分析"
         description="支持 PDF 与图片合同，上传后进入结构解析、条款识别与证据定位。"
-        actionLabel="快速载入"
-        onAction={() => void loadSample()}
+        actionLabel="上传合同"
+        onAction={() => {
+          const input = document.getElementById("contract-upload-input") as HTMLInputElement | null;
+          input?.click();
+        }}
       />
     )
   ) : (

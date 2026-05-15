@@ -13,8 +13,11 @@ export interface EvidenceRef {
   page: number;
   bbox: [number, number, number, number];
   text: string;
-  sourceType: "section" | "clause";
+  sourceType: "section" | "clause" | "fact";
   sourceId: string;
+  segmentIndex: number;
+  segmentCount: number;
+  isPrimary: boolean;
   accent?: "cyan" | "amber";
 }
 
