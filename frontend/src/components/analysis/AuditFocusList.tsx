@@ -9,7 +9,7 @@ const focusGroups: Array<{
   {
     key: "user_rule_check",
     title: "用户配置-规则校验",
-    description: "这部分关注点来自你配置的规则校验项，强调制度化、可重复执行的检查口径。",
+    description: "这部分关注点严格对应规则引擎执行结果。每条卡片都应能说明是否命中、是否执行失败，以及是否存在引擎请求日志。",
   },
   {
     key: "user_relation_check",
@@ -23,7 +23,7 @@ const focusGroups: Array<{
   },
   {
     key: "agent_discovered",
-    title: "Agent 发现",
+    title: "Agent发现",
     description: "这部分不是你预设的检查项，而是 Agent 基于合同内容主动识别出的关注方向。",
   },
 ];

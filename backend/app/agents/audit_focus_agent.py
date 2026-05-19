@@ -231,6 +231,11 @@ class AuditFocusAgent:
                 for relation_id in self._to_list(item.get("matchedRelationIds") or item.get("matched_relation_ids"))
                 if relation_id in relation_map
             ]
+            matched_relation_ids = [
+                relation_id
+                for relation_id in matched_relation_ids
+                if relation_map[relation_id].configType != AuditConfigType.RULE_CHECK
+            ]
             title = self._clean(item.get("title") or item.get("name"))
             reason = self._clean(item.get("reason"))
             if not title or not reason:
@@ -338,13 +343,18 @@ class AuditFocusAgent:
         relation_map: dict[str, RelationConfig],
     ) -> str:
         text = str(value or "").strip().lower()
-        if text in {"user_rule_check", "user_relation_check", "user_external_check", "agent_discovered"}:
+        if text == "user_rule_check":
+            return "agent_discovered"
+        if text in {"user_relation_check", "user_external_check", "agent_discovered"}:
             return text
         if matched_relation_ids:
-            matched_relations = [relation_map[item] for item in matched_relation_ids if item in relation_map]
-            for relation in matched_relations:
-                if relation.configType == AuditConfigType.RULE_CHECK:
-                    return "user_rule_check"
+            matched_relations = [
+                relation_map[item]
+                for item in matched_relation_ids
+                if item in relation_map and relation_map[item].configType != AuditConfigType.RULE_CHECK
+            ]
+            if not matched_relations:
+                return "agent_discovered"
             for relation in matched_relations:
                 if relation.configType == AuditConfigType.EXTERNAL_CHECK:
                     return "user_external_check"
