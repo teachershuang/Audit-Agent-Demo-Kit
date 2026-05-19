@@ -1,26 +1,22 @@
-import { FileText, GitBranch, ListTree, Radar, ShieldCheck, Workflow } from "lucide-react";
+import { FileText, ListTree, Radar, ShieldCheck, Workflow } from "lucide-react";
 import type { AgentStep, AuditFocus, VerificationItem } from "../../types/audit";
 import type { AnalysisTab, ClauseTag, ContractSection, KeyFact } from "../../types/contract";
-import type { RelationConfig } from "../../types/relation";
 import { AgentTimeline } from "./AgentTimeline";
 import { AuditFocusList } from "./AuditFocusList";
 import { ClauseTagList } from "./ClauseTagList";
 import { SectionTree } from "./SectionTree";
 import { VerificationPanel } from "./VerificationPanel";
-import { RelationConfigPanel } from "../config/RelationConfigPanel";
 
 const tabItems: Array<{
   id: AnalysisTab;
-  label: string;
   shortLabel: string;
   icon: typeof ListTree;
 }> = [
-  { id: "sections", label: "章节还原", shortLabel: "章节还原", icon: ListTree },
-  { id: "clauses", label: "条款标签", shortLabel: "条款标签", icon: FileText },
-  { id: "relations", label: "审计配置", shortLabel: "审计配置", icon: GitBranch },
-  { id: "audit", label: "审计关注点", shortLabel: "审计关注点", icon: Radar },
-  { id: "verification", label: "校验证据链", shortLabel: "校验证据链", icon: ShieldCheck },
-  { id: "logs", label: "Agent 过程", shortLabel: "Agent 过程", icon: Workflow },
+  { id: "sections", shortLabel: "章节还原", icon: ListTree },
+  { id: "clauses", shortLabel: "条款标签", icon: FileText },
+  { id: "audit", shortLabel: "审计关注点", icon: Radar },
+  { id: "verification", shortLabel: "校验证据链", icon: ShieldCheck },
+  { id: "logs", shortLabel: "Agent 过程", icon: Workflow },
 ];
 
 interface AnalysisTabsProps {
@@ -30,7 +26,6 @@ interface AnalysisTabsProps {
   clauses: ClauseTag[];
   keyFacts: KeyFact[];
   contractNumber: string | null;
-  relations: RelationConfig[];
   auditFocuses: AuditFocus[];
   verificationItems: VerificationItem[];
   agentSteps: AgentStep[];
@@ -40,9 +35,6 @@ interface AnalysisTabsProps {
   onSectionSelect: (section: ContractSection) => void;
   onClauseSelect: (clause: ClauseTag) => void;
   onAuditSelect: (focus: AuditFocus) => void;
-  onRelationSave: (relation: RelationConfig) => void;
-  onRelationDelete: (relationId: string) => void;
-  onRegenerateAudit: () => void;
 }
 
 const overviewSlots = [
@@ -74,7 +66,6 @@ export function AnalysisTabs({
   clauses,
   keyFacts,
   contractNumber,
-  relations,
   auditFocuses,
   verificationItems,
   agentSteps,
@@ -84,9 +75,6 @@ export function AnalysisTabs({
   onSectionSelect,
   onClauseSelect,
   onAuditSelect,
-  onRelationSave,
-  onRelationDelete,
-  onRegenerateAudit,
 }: AnalysisTabsProps) {
   const overviewCards = overviewSlots.map((slot) => {
     const slotLabels = slot.labels as readonly string[];
@@ -98,7 +86,9 @@ export function AnalysisTabs({
         fact = {
           id: "overview_parties",
           label: "甲乙方信息",
-          value: [partyA ? `甲方：${partyA.value}` : "", partyB ? `乙方：${partyB.value}` : ""].filter(Boolean).join("；"),
+          value: [partyA ? `甲方：${partyA.value}` : "", partyB ? `乙方：${partyB.value}` : ""]
+            .filter(Boolean)
+            .join("；"),
           page: partyA?.page ?? partyB?.page ?? 1,
           confidence: Math.max(partyA?.confidence ?? 0, partyB?.confidence ?? 0),
           evidenceId: partyA?.evidenceId ?? partyB?.evidenceId ?? null,
@@ -115,32 +105,45 @@ export function AnalysisTabs({
   });
 
   const renderActiveTab = () => {
-    if (activeTab === "relations") {
-      return (
-        <RelationConfigPanel
-          relations={relations}
-          activeId={activeEntity?.kind === "relation" ? activeEntity.id : null}
-          onSave={onRelationSave}
-          onDelete={onRelationDelete}
-          onRegenerateAudit={onRegenerateAudit}
-        />
-      );
-    }
-
     if (!hasResult) {
       if (activeTab === "sections") {
-        return <EmptyTabPanel title="等待合同上传" description="上传合同后，这里会按合同原始顺序展示章节结构，并保留条、款、附件等层级信息。" />;
+        return (
+          <EmptyTabPanel
+            title="等待合同上传"
+            description="上传合同后，这里会按合同原始顺序展示章节结构，并保留条、款、附件等层级信息。"
+          />
+        );
       }
       if (activeTab === "clauses") {
-        return <EmptyTabPanel title="等待条款识别" description="上传合同后，这里会展示结构化条款标签、引用关系和供规则引擎使用的短字段。" />;
+        return (
+          <EmptyTabPanel
+            title="等待条款识别"
+            description="上传合同后，这里会展示结构化条款标签、交叉引用关系，以及可供规则引擎使用的字段。"
+          />
+        );
       }
       if (activeTab === "audit") {
-        return <EmptyTabPanel title="等待审计关注点生成" description="上传合同并完成解析后，这里会同时展示用户配置触发和 Agent 主动发现的关注方向。" />;
+        return (
+          <EmptyTabPanel
+            title="等待审计关注点生成"
+            description="完成解析后，这里会同时展示用户配置触发和 Agent 主动发现的关注方向。"
+          />
+        );
       }
       if (activeTab === "verification") {
-        return <EmptyTabPanel title="等待校验证据链" description="合同解析完成后，这里会展示规则命中、模型校验和证据链说明。" />;
+        return (
+          <EmptyTabPanel
+            title="等待校验结果"
+            description="合同解析完成后，这里会展示规则命中、模型校验和证据链说明。"
+          />
+        );
       }
-      return <EmptyTabPanel title="等待 Agent 过程日志" description="上传合同后，这里会显示每一步解析动作、所用工具和产出摘要。" />;
+      return (
+        <EmptyTabPanel
+          title="等待 Agent 过程日志"
+          description="上传合同后，这里会显示每一步解析动作、所用工具和输出摘要。"
+        />
+      );
     }
 
     if (activeTab === "sections") {
@@ -162,7 +165,13 @@ export function AnalysisTabs({
       );
     }
     if (activeTab === "audit") {
-      return <AuditFocusList items={auditFocuses} activeId={activeEntity?.kind === "audit" ? activeEntity.id : null} onSelect={onAuditSelect} />;
+      return (
+        <AuditFocusList
+          items={auditFocuses}
+          activeId={activeEntity?.kind === "audit" ? activeEntity.id : null}
+          onSelect={onAuditSelect}
+        />
+      );
     }
     if (activeTab === "verification") {
       return <VerificationPanel items={verificationItems} clauses={clauses} />;
@@ -173,7 +182,9 @@ export function AnalysisTabs({
   return (
     <div className="glass-panel flex h-full min-h-[720px] flex-col rounded-[28px] border border-white/8 p-4">
       <div className="border-b border-white/8 pb-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200/70">Audit Intelligence Dashboard</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200/70">
+          Audit Intelligence Dashboard
+        </p>
         <h2 className="mt-1 font-display text-xl text-white">智能解析结果</h2>
         <p className="mt-2 text-sm text-slate-300">
           章节区和条款区职责分开：章节负责顺序还原，条款负责结构化理解、引用关系与规则输入准备。
@@ -190,14 +201,16 @@ export function AnalysisTabs({
               <div className={`mt-2 line-clamp-3 text-sm ${card.muted ? "text-slate-400" : "text-white"}`}>
                 {card.title === "合同编号" ? contractNumber ?? "未提取" : card.value}
               </div>
-              {!card.muted ? <div className="mt-2 text-[11px] text-cyan-100/75">置信度 {Math.round(card.confidence * 100)}%</div> : null}
+              {!card.muted ? (
+                <div className="mt-2 text-[11px] text-cyan-100/75">置信度 {Math.round(card.confidence * 100)}%</div>
+              ) : null}
             </div>
           ))}
         </div>
       </div>
 
       <div className="mt-4">
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-5">
           {tabItems.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -222,7 +235,7 @@ export function AnalysisTabs({
 
       {isBusy && !hasResult ? (
         <div className="mt-4 rounded-2xl border border-cyan-400/16 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-50/90">
-          合同正在解析中，审计配置仍可查看；建议在当前任务完成后再修改配置并重新生成关注点。
+          合同正在解析中。审计配置请通过右上角入口维护；建议在当前任务完成后再调整配置并重新生成关注点。
         </div>
       ) : null}
 

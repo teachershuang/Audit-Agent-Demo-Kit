@@ -15,12 +15,14 @@ export function RelationConfigPanel({
   onSave,
   onDelete,
   onRegenerateAudit,
+  allowRegenerate = true,
 }: {
   relations: RelationConfig[];
   activeId: string | null;
   onSave: (value: RelationConfig) => void;
   onDelete: (relationId: string) => void;
   onRegenerateAudit: () => void;
+  allowRegenerate?: boolean;
 }) {
   const [editing, setEditing] = useState<RelationConfig | null>(null);
   const [creating, setCreating] = useState(false);
@@ -54,7 +56,7 @@ export function RelationConfigPanel({
       <div className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
         <h3 className="text-base font-semibold text-white">审计配置</h3>
         <p className="mt-2 text-sm leading-7 text-slate-300">
-          这部分独立于合同上传。你可以先配置关系关注、规则校验和外部核验策略，再用同一套配置去分析不同合同。
+          配置先于合同解析存在。你可以先定义关系关注、规则校验和外部核验策略，再用同一套配置去分析不同合同。
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
@@ -68,14 +70,16 @@ export function RelationConfigPanel({
             <Plus className="h-4 w-4" />
             新增审计配置
           </button>
-          <button
-            type="button"
-            onClick={onRegenerateAudit}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200"
-          >
-            <RefreshCcw className="h-4 w-4" />
-            重新生成关注点
-          </button>
+          {allowRegenerate ? (
+            <button
+              type="button"
+              onClick={onRegenerateAudit}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              按当前配置重新生成关注点
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -117,14 +121,14 @@ export function RelationConfigPanel({
                 key={relation.id}
                 id={`card-${relation.id}`}
                 className={`rounded-[22px] border p-4 ${
-                  activeId === relation.id
-                    ? "border-cyan-300/40 bg-cyan-400/[0.08]"
-                    : "border-white/8 bg-white/[0.03]"
+                  activeId === relation.id ? "border-cyan-300/40 bg-cyan-400/[0.08]" : "border-white/8 bg-white/[0.03]"
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">{typeLabelMap[relation.configType]}</p>
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">
+                      {typeLabelMap[relation.configType]}
+                    </p>
                     <h3 className="mt-1 text-base font-semibold text-white">{relation.name}</h3>
                   </div>
                   <div className="flex items-center gap-2">
@@ -157,7 +161,10 @@ export function RelationConfigPanel({
 
                 <div className="mt-4 flex flex-wrap gap-2">
                   {relation.toolSource.map((source) => (
-                    <span key={source} className="rounded-full border border-cyan-400/18 bg-cyan-400/8 px-3 py-1 text-xs text-cyan-100">
+                    <span
+                      key={source}
+                      className="rounded-full border border-cyan-400/18 bg-cyan-400/8 px-3 py-1 text-xs text-cyan-100"
+                    >
                       {source}
                     </span>
                   ))}

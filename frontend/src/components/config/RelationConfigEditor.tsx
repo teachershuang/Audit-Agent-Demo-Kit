@@ -170,7 +170,11 @@ export function RelationConfigEditor({
             保存
           </button>
           {onCancel ? (
-            <button type="button" onClick={onCancel} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300"
+            >
               取消
             </button>
           ) : null}

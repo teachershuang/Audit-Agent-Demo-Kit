@@ -1,4 +1,4 @@
-import { Download, FileUp, RefreshCcw, Sparkles } from "lucide-react";
+import { Download, FileUp, RefreshCcw, Settings2, Sparkles } from "lucide-react";
 import type { ContractTask } from "../../types/contract";
 import { ConfidenceBadge } from "../shared/ConfidenceBadge";
 
@@ -6,6 +6,7 @@ interface HeaderBarProps {
   task: ContractTask | null;
   busy: boolean;
   contractNumber: string | null;
+  onOpenAuditConfig: () => void;
   onUpload: (file: File) => void;
   onLoadSample: () => void;
   onReanalyze: () => void;
@@ -23,6 +24,7 @@ export function HeaderBar({
   task,
   busy,
   contractNumber,
+  onOpenAuditConfig,
   onUpload,
   onLoadSample,
   onReanalyze,
@@ -39,8 +41,12 @@ export function HeaderBar({
             <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-cyan-200/70">
               Audit Intelligence Workbench
             </p>
-            <h1 className="mt-1 font-display text-2xl text-white md:text-[30px]">合同智能解析与审计关注点 Agent</h1>
-            <p className="mt-2 text-sm text-slate-300">合同结构、关键条款、证据定位与审计关注事项统一呈现。</p>
+            <h1 className="mt-1 font-display text-2xl text-white md:text-[30px]">
+              合同智能解析与审计关注点 Agent
+            </h1>
+            <p className="mt-2 text-sm text-slate-300">
+              合同结构、关键条款、证据定位与审计关注事项统一呈现。
+            </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
                 合同编号 {contractNumber ?? "未提取"}
@@ -51,11 +57,13 @@ export function HeaderBar({
                 </span>
               ) : null}
             </div>
-            {task?.stageDetail ? <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p> : null}
+            {task?.stageDetail ? (
+              <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p>
+            ) : null}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 xl:min-w-[460px] xl:items-end">
+        <div className="flex flex-col gap-3 xl:min-w-[540px] xl:items-end">
           <div className="flex w-full flex-col gap-2 xl:items-end">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
@@ -83,6 +91,14 @@ export function HeaderBar({
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenAuditConfig}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400/24 hover:bg-white/[0.08]"
+            >
+              <Settings2 className="h-4 w-4" />
+              审计配置
+            </button>
             <label className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/12 px-4 py-2 text-sm font-medium text-cyan-50 transition hover:bg-cyan-400/18">
               <FileUp className="h-4 w-4" />
               上传合同

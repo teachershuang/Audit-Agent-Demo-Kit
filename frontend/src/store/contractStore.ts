@@ -56,7 +56,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
   auditFocuses: [],
   verificationItems: [],
   agentSteps: [],
-  activeTab: "relations",
+  activeTab: "sections",
   activePage: 1,
   selectedEvidenceId: null,
   activeEntity: null,
@@ -274,7 +274,6 @@ export const useContractStore = create<ContractState>((set, get) => ({
     set({
       relations: exists ? get().relations.map((item) => (item.id === relation.id ? saved : item)) : [...get().relations, saved],
       activeEntity: { kind: "relation", id: saved.id },
-      activeTab: "relations",
     });
   },
 
