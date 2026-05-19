@@ -1,0 +1,107 @@
+{
+  "taskId": "task_20260519_001",
+  "contract": {
+    "contractNumber": "15-20220929",
+    "sectionCount": 7,
+    "clauseCount": 12,
+    "sections": [
+      {
+        "id": "section_001",
+        "title": "一、合同主体信息",
+        "level": 1,
+        "page": 1,
+        "sortOrder": 1,
+        "sectionCode": "一",
+        "sectionPath": "一、合同主体信息",
+        "summary": "约定甲乙双方主体信息和签约基础。"
+      }
+    ],
+    "clauses": [
+      {
+        "id": "clause_004",
+        "label": "付款条件",
+        "coreLabel": "付款条件",
+        "labelSource": "core",
+        "title": "合同金额与付款方式",
+        "sectionTitle": "四、合同金额与付款方式",
+        "page": 6,
+        "sortOrder": 4,
+        "summary": "约定付款比例和付款节点。",
+        "rawText": "甲方应在合同签订后10个工作日内支付合同金额的30%……",
+        "references": [],
+        "structuredFields": {
+          "paymentTrigger": "合同签订后10个工作日内",
+          "paymentRatio": "30%"
+        },
+        "confidence": 0.91
+      }
+    ],
+    "keyFacts": [
+      {
+        "id": "fact_contract_number",
+        "label": "合同编号",
+        "value": "15-20220929",
+        "page": 1,
+        "confidence": 0.93
+      },
+      {
+        "id": "fact_contract_amount",
+        "label": "合同金额",
+        "value": "20万元",
+        "page": 6,
+        "confidence": 0.9
+      }
+    ]
+  },
+  "entities": {
+    "partyA": "甲方示例公司",
+    "partyB": "乙方示例公司",
+    "partySummary": "甲乙双方主体完整",
+    "subjectSummary": "技术服务合同",
+    "serviceContent": "道路测绘与技术服务",
+    "contractAmount": "20万元",
+    "paymentTerms": "合同签订后10个工作日内支付30%",
+    "acceptanceTerms": null,
+    "performanceTerm": "2022年10月至2022年12月",
+    "disputeTerms": "协商不成提交仲裁",
+    "accountInfo": null
+  },
+  "factMap": {
+    "合同编号": "15-20220929",
+    "合同金额": "20万元",
+    "付款条件": "合同签订后10个工作日内支付30%",
+    "履约期限": "2022年10月至2022年12月"
+  },
+  "derived": {
+    "hasContractNumber": true,
+    "hasPaymentClause": true,
+    "hasAcceptanceClause": false,
+    "hasBreachClause": true,
+    "hasDisputeClause": true,
+    "hasAccountClause": false,
+    "crossReferences": []
+  },
+  "auditConfigs": [
+    {
+      "id": "config_rule_payment_without_acceptance_gate",
+      "name": "付款缺少验收约束",
+      "description": "存在付款条款但没有明确验收约束时触发。",
+      "priority": "high",
+      "configType": "rule_check",
+      "riskPrompt": "请检查付款条款是否缺少验收闭环约束。",
+      "rulePayload": {
+        "ruleId": "payment_without_acceptance_gate",
+        "extractFields": [
+          {
+            "label": "付款条件",
+            "description": "提取付款条件"
+          },
+          {
+            "label": "验收标准",
+            "description": "提取验收标准"
+          }
+        ]
+      }
+    }
+  ]
+}

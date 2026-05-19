@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "rulesetName": "contract_audit_baseline",
+  "description": "合同审计第一批建议规则。可由 GoRules 负责人按平台导入格式映射后配置。",
+  "rules": [
+    {
+      "configId": "config_rule_missing_contract_number",
+      "ruleId": "missing_contract_number",
+      "ruleName": "合同编号缺失",
+      "severity": "medium",
+      "condition": "contract.contractNumber == null || contract.contractNumber == ''",
+      "decision": "hit",
+      "reason": "未成功提取合同编号，建议回看首页、签署页或页眉页脚并人工复核。",
+      "dependsOn": ["合同编号"],
+      "evidenceClauseIds": []
+    },
+    {
+      "configId": "config_rule_payment_without_acceptance_gate",
+      "ruleId": "payment_without_acceptance_gate",
+      "ruleName": "付款条款缺少验收约束",
+      "severity": "high",
+      "condition": "derived.hasPaymentClause == true && derived.hasAcceptanceClause == false",
+      "decision": "hit",
+      "reason": "识别到付款条款，但未识别到明确验收标准，存在先付款后验收风险。",
+      "dependsOn": ["付款条件", "验收标准"],
+      "evidenceClauseIds": []
+    },
+    {
+      "configId": "config_rule_missing_breach_clause",
+      "ruleId": "missing_breach_clause",
+      "ruleName": "违约责任条款缺失",
+      "severity": "medium",
+      "condition": "derived.hasBreachClause == false",
+      "decision": "hit",
+      "reason": "未识别到违约责任条款，建议核查合同责任约束是否完整。",
+      "dependsOn": ["违约责任"],
+      "evidenceClauseIds": []
+    },
+    {
+      "configId": "config_rule_missing_account_info",
+      "ruleId": "missing_account_info",
+      "ruleName": "账户信息缺失",
+      "severity": "medium",
+      "condition": "entities.accountInfo == null || entities.accountInfo == ''",
+      "decision": "hit",
+      "reason": "未抽取到账户信息。若合同涉及付款执行，建议补充收款账户核验。",
+      "dependsOn": ["账户信息"],
+      "evidenceClauseIds": []
+    },
+    {
+      "configId": "config_rule_amount_present_but_payment_missing",
+      "ruleId": "amount_present_but_payment_missing",
+      "ruleName": "有金额但缺少付款安排",
+      "severity": "high",
+      "condition": "entities.contractAmount != null && entities.contractAmount != '' && derived.hasPaymentClause == false",
+      "decision": "hit",
+      "reason": "已识别合同金额，但未识别到付款条款，建议核查付款安排是否缺失。",
+      "dependsOn": ["合同金额", "付款条件"],
+      "evidenceClauseIds": []
+    }
+  ]
+}
