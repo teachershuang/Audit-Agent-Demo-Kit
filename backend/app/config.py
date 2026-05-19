@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     section_batch_overlap: int = 1
     clause_batch_size: int = 4
     key_fact_batch_size: int = 6
+    gorules_enabled: bool = False
+    gorules_base_url: str = ""
+    gorules_api_key: str = ""
+    gorules_decision_path: str = "/api/decision"
+    gorules_timeout_seconds: int = 30
 
     storage_dir: str = "uploads"
     ocr_cache_enabled: bool = True

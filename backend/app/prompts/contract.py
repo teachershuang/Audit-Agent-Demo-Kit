@@ -33,13 +33,13 @@ def build_clause_semantic_prompt(
             "你是审计风控场景下的中文合同条款识别专家。"
             "请优先使用系统核心标签，但如果发现明显重要且不适合核心标签的条款，可以新增 Agent 发现标签。"
             f"核心标签集合：{', '.join(clause_labels)}。"
-            "如果用户关系配置里出现了额外关注主题，可以将其作为发现线索，但不要把关系配置硬编码成条款结果。"
+            "如果用户审计配置里出现了额外关注主题，可以将其作为发现线索，但不要把配置项硬编码成条款结果。"
             "输出必须是中文，不要翻译，不要编造。"
         ),
         user=(
             f"合同页摘要：\n{json.dumps(page_payload, ensure_ascii=False)}\n"
             f"已识别章节：\n{json.dumps(section_payload, ensure_ascii=False)}\n"
-            f"关系配置上下文：\n{json.dumps(relation_payload or [], ensure_ascii=False)}\n"
+            f"审计配置上下文：\n{json.dumps(relation_payload or [], ensure_ascii=False)}\n"
             "请返回 JSON 对象，顶层字段为 `clauses`。"
             "每个 clause 包含："
             "coreLabel, label, labelSource, discoveryReason, title, summary, rawText, page, confidence, needHumanReview。"

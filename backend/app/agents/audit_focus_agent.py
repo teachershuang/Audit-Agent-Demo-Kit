@@ -7,7 +7,7 @@ from app.prompts.audit import build_audit_focus_prompt
 from app.prompts.context import build_relation_prompt_context
 from app.schemas.audit import AuditFocus
 from app.schemas.contract import ClauseTag, ContractSection, KeyFact
-from app.schemas.relation import RelationConfig
+from app.schemas.relation import AuditConfigType, RelationConfig
 from app.services.qwen_service import QwenService
 
 
@@ -113,7 +113,11 @@ class AuditFocusAgent:
             {
                 "focus_hint": "主体、账户、供应商关系、疑似关联、外部核验依赖",
                 "clauses": [clause for clause in clauses if clause.coreLabel in relation_sensitive] or clauses[-8:],
-                "relations": [relation for relation in relations if relation.enabled],
+                "relations": [
+                    relation
+                    for relation in relations
+                    if relation.enabled and relation.configType in {AuditConfigType.RELATION_FOCUS, AuditConfigType.EXTERNAL_CHECK}
+                ],
                 "key_facts": [fact for fact in key_facts if fact.label in {"甲方", "乙方", "甲乙方信息", "账户信息", "合同金额"}],
             },
         ]
@@ -181,7 +185,7 @@ class AuditFocusAgent:
         clause_by_core = {clause.coreLabel: clause for clause in clauses}
         focuses: list[AuditFocus] = []
         for relation in relations:
-            if not relation.enabled:
+            if not relation.enabled or relation.configType == AuditConfigType.RULE_CHECK:
                 continue
             related_clause_ids: list[str] = []
             depends_on: list[str] = []

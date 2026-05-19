@@ -24,8 +24,14 @@ class VerificationAgent:
         sections: list[ContractSection],
         clauses: list[ClauseTag],
         audit_focuses: list[AuditFocus],
+        rule_results: dict[str, Any] | None = None,
     ) -> list[VerificationItem]:
-        items = self._build_rule_items(sections=sections, clauses=clauses, audit_focuses=audit_focuses)
+        items = self._build_rule_items(
+            sections=sections,
+            clauses=clauses,
+            audit_focuses=audit_focuses,
+            rule_results=rule_results or {},
+        )
         if not items or not self.qwen_service.is_available:
             return items
         try:
@@ -39,6 +45,7 @@ class VerificationAgent:
         sections: list[ContractSection],
         clauses: list[ClauseTag],
         audit_focuses: list[AuditFocus],
+        rule_results: dict[str, Any],
     ) -> list[VerificationItem]:
         items: list[VerificationItem] = []
         clause_by_label = {item.coreLabel or item.label: item for item in clauses}
@@ -127,6 +134,41 @@ class VerificationAgent:
                 )
             )
 
+        rule_items = self._build_engine_rule_items(clauses=clauses, rule_results=rule_results)
+        items.extend(rule_items)
+        return items
+
+    @staticmethod
+    def _build_engine_rule_items(
+        clauses: list[ClauseTag],
+        rule_results: dict[str, Any],
+    ) -> list[VerificationItem]:
+        matched_rules = rule_results.get("matchedRules") or []
+        if not isinstance(matched_rules, list):
+            return []
+        clause_ids = {clause.id for clause in clauses}
+        items: list[VerificationItem] = []
+        for index, item in enumerate(matched_rules, start=1):
+            if not isinstance(item, dict):
+                continue
+            matched_clause_ids = [
+                clause_id
+                for clause_id in item.get("evidenceClauseIds", [])
+                if isinstance(clause_id, str) and clause_id in clause_ids
+            ]
+            severity = str(item.get("severity") or "medium").lower()
+            status = VerificationStatus.WARNING if severity in {"low", "medium"} else VerificationStatus.FAIL
+            items.append(
+                VerificationItem(
+                    id=f"verify_rule_engine_{index:03d}",
+                    name=str(item.get("ruleName") or item.get("ruleId") or "规则引擎命中"),
+                    method="GoRules 规则校验",
+                    status=status,
+                    description=str(item.get("reason") or "规则引擎命中了一个待复核条件。"),
+                    relatedClauseIds=matched_clause_ids,
+                    needExternalTool=False,
+                )
+            )
         return items
 
     async def _request_verification_narratives(

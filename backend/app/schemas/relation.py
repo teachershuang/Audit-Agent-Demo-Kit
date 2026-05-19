@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -20,7 +21,13 @@ class RelationPriority(str, Enum):
     HIGH = "high"
 
 
-class RelationConfig(BaseModel):
+class AuditConfigType(str, Enum):
+    RELATION_FOCUS = "relation_focus"
+    RULE_CHECK = "rule_check"
+    EXTERNAL_CHECK = "external_check"
+
+
+class AuditConfigItem(BaseModel):
     id: str
     name: str
     description: str
@@ -28,3 +35,9 @@ class RelationConfig(BaseModel):
     riskPrompt: str
     toolSource: list[RelationToolSource] = Field(default_factory=list)
     priority: RelationPriority = RelationPriority.MEDIUM
+    configType: AuditConfigType = AuditConfigType.RELATION_FOCUS
+    rulePayload: dict[str, Any] | None = None
+
+
+class RelationConfig(AuditConfigItem):
+    pass

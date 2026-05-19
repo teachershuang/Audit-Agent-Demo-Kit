@@ -26,6 +26,7 @@ from app.services.paddle_ocr_service import PaddleOCRService
 from app.services.qwen_service import QwenService
 from app.services.relation_config_service import RelationConfigService
 from app.storage.local_store import LocalStore
+from app.tools.rule_engine_adapter import RuleEngineAdapter
 
 settings = get_settings()
 store = LocalStore(base_dir=Path(__file__).resolve().parents[1] / settings.storage_dir)
@@ -49,6 +50,7 @@ parser_agent = ContractParserAgent(qwen_service=qwen_service, settings=settings)
 audit_focus_agent = AuditFocusAgent(qwen_service=qwen_service)
 verification_agent = VerificationAgent(qwen_service=qwen_service)
 relation_config_service = RelationConfigService(store=store)
+rule_engine_adapter = RuleEngineAdapter(settings=settings)
 contract_agent = ContractAgent(
     document_service=document_service,
     ocr_service=ocr_service,
@@ -59,6 +61,7 @@ contract_agent = ContractAgent(
     confidence_service=confidence_service,
     planner=planner,
     storage_dir=store.base_dir,
+    rule_engine_adapter=rule_engine_adapter,
 )
 
 app = FastAPI(title=settings.app_name, version="0.1.0")

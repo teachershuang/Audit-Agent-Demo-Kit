@@ -17,7 +17,7 @@ const tabItems: Array<{
 }> = [
   { id: "sections", label: "章节还原", shortLabel: "章节还原", icon: ListTree },
   { id: "clauses", label: "条款标签", shortLabel: "条款标签", icon: FileText },
-  { id: "relations", label: "关系配置", shortLabel: "关系配置", icon: GitBranch },
+  { id: "relations", label: "审计配置", shortLabel: "审计配置", icon: GitBranch },
   { id: "audit", label: "审计关注点", shortLabel: "审计关注点", icon: Radar },
   { id: "verification", label: "校验证据链", shortLabel: "校验证据链", icon: ShieldCheck },
   { id: "logs", label: "Agent 过程日志", shortLabel: "Agent 过程", icon: Workflow },
@@ -105,7 +105,7 @@ export function AnalysisTabs({
         </p>
         <h2 className="mt-1 font-display text-xl text-white">智能解析结果</h2>
         <p className="mt-2 text-sm text-slate-300">
-          按章节、条款、关系配置、关注事项、校验与过程分区查看，右侧分析不会再拖动左侧原件区。
+          按章节、条款、审计配置、关注事项、校验与过程分区查看，右侧分析不会再拖动左侧原件区。
         </p>
         <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1.3fr)_repeat(3,minmax(0,1fr))]">
           {overviewCards.map((card, index) => (

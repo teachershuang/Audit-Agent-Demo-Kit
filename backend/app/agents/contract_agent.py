@@ -17,6 +17,7 @@ from app.services.confidence_service import ConfidenceService
 from app.services.document_service import DocumentService
 from app.services.evidence_service import EvidenceService
 from app.services.ocr_service import OCRService
+from app.tools.rule_engine_adapter import RuleEngineAdapter
 
 
 @dataclass
@@ -39,6 +40,7 @@ class ContractAgent:
         confidence_service: ConfidenceService,
         planner: Planner,
         storage_dir: Path,
+        rule_engine_adapter: RuleEngineAdapter,
     ) -> None:
         self.document_service = document_service
         self.ocr_service = ocr_service
@@ -49,6 +51,7 @@ class ContractAgent:
         self.confidence_service = confidence_service
         self.planner = planner
         self.storage_dir = storage_dir
+        self.rule_engine_adapter = rule_engine_adapter
 
     async def analyze(
         self,
@@ -146,15 +149,22 @@ class ContractAgent:
             )
         )
 
-        self._emit_progress(progress_callback, 90, "evidence_and_audit", "正在并行执行证据 grounding 和审计关注点生成。")
+        self._emit_progress(progress_callback, 90, "evidence_and_audit", "正在并行执行证据 grounding、规则校验和审计关注点生成。")
         evidence_task = self.evidence_service.attach_evidences(extracted.pages, sections, clauses, key_facts)
+        rule_task = self.rule_engine_adapter.evaluate(
+            task_id=task.taskId,
+            sections=sections,
+            clauses=clauses,
+            key_facts=key_facts,
+            configs=relations,
+        )
         audit_task = self.audit_focus_agent.generate(
             sections=sections,
             clauses=clauses,
             relations=relations,
             key_facts=key_facts,
         )
-        _, audit_focuses = await asyncio.gather(evidence_task, audit_task)
+        _, rule_results, audit_focuses = await asyncio.gather(evidence_task, rule_task, audit_task)
         self._emit_progress(progress_callback, 96, "audit_focus_generation", f"已生成 {len(audit_focuses)} 项审计关注方向，并完成证据 grounding。")
 
         agent_steps.append(
@@ -172,10 +182,21 @@ class ContractAgent:
         agent_steps.append(
             self._step(
                 "step_008",
+                "规则引擎校验",
+                AgentStepStatus.SUCCESS if rule_results.get("status") in {"ok", "no_rule_configs", "not_connected"} else AgentStepStatus.WARNING,
+                260,
+                f"{len(relations)} audit configs",
+                f"Rule engine status: {rule_results.get('status', 'unknown')} / matches {len(rule_results.get('matchedRules', []))}",
+                "gorules_adapter",
+            )
+        )
+        agent_steps.append(
+            self._step(
+                "step_009",
                 "审计关注点生成",
                 AgentStepStatus.SUCCESS,
                 840,
-                f"{len(relations)} relation configs",
+                f"{len(relations)} audit configs",
                 f"Generated {len(audit_focuses)} audit focus items",
                 "audit_focus_agent",
             )
@@ -185,11 +206,12 @@ class ContractAgent:
             sections=sections,
             clauses=clauses,
             audit_focuses=audit_focuses,
+            rule_results=rule_results,
         )
         self._emit_progress(progress_callback, 98, "verification", f"已整理 {len(verification_items)} 条校验与证据链说明。")
         agent_steps.append(
             self._step(
-                "step_009",
+                "step_010",
                 "异构校验",
                 AgentStepStatus.SUCCESS,
                 180,
