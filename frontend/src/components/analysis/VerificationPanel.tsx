@@ -4,7 +4,7 @@ import type { ClauseTag } from "../../types/contract";
 const statusMap = {
   pass: "已通过",
   warning: "建议复核",
-  fail: "需要补齐",
+  fail: "需要补充",
   external_pending: "待外部核验",
 } as const;
 
@@ -16,26 +16,50 @@ const statusTone = {
 } as const;
 
 function buildUserSummary(item: VerificationItem) {
+  if (item.source === "rule_engine") {
+    switch (item.engineStatus) {
+      case "hit":
+        return "规则引擎命中了当前配置的审计口径，建议重点复核该项证据与条款。";
+      case "missing_configured_rules":
+        return "本地配置已存在，但规则引擎里没有对应规则，这条配置本轮没有真正执行。";
+      case "unmatched_returned_rules":
+        return "规则引擎返回了结果，但这些结果没有正确映射到当前页面配置，需要继续对齐。";
+      case "not_connected":
+        return "规则引擎未接入，本轮只能展示模型抽取和基础校验结果。";
+      case "engine_error":
+        return "规则引擎调用失败，这一轮校验结果不完整。";
+      default:
+        return item.description;
+    }
+  }
+
   switch (item.status) {
     case "pass":
       return "系统已经找到足够支撑当前判断的证据，这一项可以继续向下查看。";
     case "warning":
-      return "系统识别到了线索，但完整性或一致性还不够稳，建议人工复核。";
+      return "系统识别到了线索，但完整性或一致性还不够稳定，建议人工复核。";
     case "fail":
       return "当前没有找到足够支撑内容，建议补充合同条款或重新核验。";
     case "external_pending":
-      return "仅依赖合同文本无法确认，需要接入外部数据或业务系统继续判断。";
+      return "仅依赖合同文本无法确认，还需要接入外部数据或业务系统继续判断。";
     default:
       return item.description;
   }
 }
 
 function humanizeMethod(method: string) {
-  return method
-    .replaceAll("+", " / ")
-    .replaceAll("条款标签识别", "条款识别")
-    .replaceAll("原文证据定位", "原文定位")
-    .replaceAll("关键词命中", "关键词比对");
+  return method.replaceAll("+", " / ").replaceAll("  ", " ").trim();
+}
+
+function sourceLabel(item: VerificationItem) {
+  switch (item.source) {
+    case "rule_engine":
+      return "规则引擎";
+    case "external_dependency":
+      return "外部依赖";
+    default:
+      return "系统校验";
+  }
 }
 
 export function VerificationPanel({
@@ -57,12 +81,12 @@ export function VerificationPanel({
         <div className="rounded-[22px] border border-emerald-400/18 bg-emerald-400/8 p-4">
           <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">已通过</div>
           <div className="mt-2 text-2xl font-semibold text-white">{passedCount}</div>
-          <div className="mt-1 text-sm text-slate-300">文本证据和判断逻辑基本一致</div>
+          <div className="mt-1 text-sm text-slate-300">文本证据与判断逻辑基本一致</div>
         </div>
         <div className="rounded-[22px] border border-amber-400/18 bg-amber-400/8 p-4">
           <div className="text-[11px] uppercase tracking-[0.22em] text-amber-100/70">建议复核</div>
           <div className="mt-2 text-2xl font-semibold text-white">{warningCount}</div>
-          <div className="mt-1 text-sm text-slate-300">有识别结果，但不建议直接当成最终依据</div>
+          <div className="mt-1 text-sm text-slate-300">识别到了线索，但不建议直接作为最终依据</div>
         </div>
         <div className="rounded-[22px] border border-cyan-400/18 bg-cyan-400/8 p-4">
           <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-100/70">待外部核验</div>
@@ -81,10 +105,22 @@ export function VerificationPanel({
           return (
             <article key={item.id} id={`card-${item.id}`} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">校验结论</p>
-                  <h3 className="mt-1 text-base font-semibold text-white">{item.name}</h3>
-                  <p className="mt-2 text-sm leading-7 text-slate-300">{buildUserSummary(item)}</p>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] tracking-[0.12em] text-slate-300">
+                      {sourceLabel(item)}
+                    </span>
+                    {item.ruleId ? (
+                      <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[11px] tracking-[0.08em] text-cyan-100">
+                        Rule ID {item.ruleId}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">校验结论</p>
+                    <h3 className="mt-1 text-base font-semibold text-white">{item.name}</h3>
+                    <p className="mt-2 text-sm leading-7 text-slate-300">{buildUserSummary(item)}</p>
+                  </div>
                 </div>
                 <span className={`rounded-full border px-3 py-1 text-[11px] tracking-[0.12em] ${statusTone[item.status]}`}>
                   {statusMap[item.status]}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -45,3 +46,8 @@ class VerificationItem(BaseModel):
     relatedClauseIds: list[str] = Field(default_factory=list)
     relatedEvidenceIds: list[str] = Field(default_factory=list)
     needExternalTool: bool = False
+    source: str = "system_check"
+    configId: str | None = None
+    ruleId: str | None = None
+    engineStatus: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)

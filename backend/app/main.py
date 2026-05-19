@@ -18,6 +18,7 @@ from app.routers.audit import get_audit_router
 from app.routers.config import get_config_router
 from app.routers.contracts import get_contract_router
 from app.routers.logs import get_logs_router
+from app.routers.rules import get_rules_router
 from app.services.confidence_service import ConfidenceService
 from app.services.document_service import DocumentService
 from app.services.evidence_service import EvidenceService
@@ -78,6 +79,7 @@ app.include_router(get_contract_router(store=store, agent=contract_agent))
 app.include_router(get_config_router(relation_config_service=relation_config_service))
 app.include_router(get_audit_router(store=store, agent=contract_agent))
 app.include_router(get_logs_router())
+app.include_router(get_rules_router(store=store, adapter=rule_engine_adapter))
 
 
 @app.middleware("http")

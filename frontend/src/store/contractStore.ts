@@ -123,6 +123,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
       }
 
       const result = await api.getContractResult(taskId);
+      const finalArtifacts = await api.analyzeContract(taskId);
       const relations = await api.getRelations();
       const selectedEvidenceId = result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null;
 
@@ -130,9 +131,9 @@ export const useContractStore = create<ContractState>((set, get) => ({
         task: result.task,
         result,
         relations,
-        auditFocuses: analyzePayload.auditFocuses ?? [],
-        verificationItems: analyzePayload.verificationItems ?? [],
-        agentSteps: analyzePayload.agentSteps ?? [],
+        auditFocuses: finalArtifacts.auditFocuses ?? analyzePayload.auditFocuses ?? [],
+        verificationItems: finalArtifacts.verificationItems ?? analyzePayload.verificationItems ?? [],
+        agentSteps: finalArtifacts.agentSteps ?? analyzePayload.agentSteps ?? [],
         activeTab: "sections",
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId,
@@ -197,14 +198,15 @@ export const useContractStore = create<ContractState>((set, get) => ({
         throw new Error(finalTask.stageDetail ?? "解析任务失败。");
       }
       const result = await api.getContractResult(currentTask.taskId);
+      const finalArtifacts = await api.analyzeContract(currentTask.taskId);
       const relations = await api.getRelations();
       set({
         task: result.task,
         result,
         relations,
-        auditFocuses: analyzePayload.auditFocuses ?? [],
-        verificationItems: analyzePayload.verificationItems ?? [],
-        agentSteps: analyzePayload.agentSteps ?? [],
+        auditFocuses: finalArtifacts.auditFocuses ?? analyzePayload.auditFocuses ?? [],
+        verificationItems: finalArtifacts.verificationItems ?? analyzePayload.verificationItems ?? [],
+        agentSteps: finalArtifacts.agentSteps ?? analyzePayload.agentSteps ?? [],
         activeTab: "sections",
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId: result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null,

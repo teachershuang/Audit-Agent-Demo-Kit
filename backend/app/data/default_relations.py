@@ -86,6 +86,64 @@ def build_default_audit_configs() -> list[AuditConfigItem]:
                 "expressionHint": "contract_number in [null, '', '未提取']",
             },
         ),
+        AuditConfigItem(
+            id="rule_003",
+            name="违约责任条款缺失",
+            description="当合同中未识别到违约责任条款时触发。",
+            enabled=True,
+            riskPrompt="检查合同是否设置了违约责任和赔偿约束，缺失时给出提示。",
+            toolSource=[RelationToolSource.RULE_ENGINE_FUTURE, RelationToolSource.MODEL_INFERENCE],
+            priority=RelationPriority.MEDIUM,
+            configType=AuditConfigType.RULE_CHECK,
+            rulePayload={
+                "ruleId": "missing_breach_clause",
+                "severity": "medium",
+                "expectedClauses": ["违约责任"],
+                "extractFields": [
+                    {"label": "违约责任", "description": "提取违约责任、赔偿约束和逾期责任"},
+                ],
+                "expressionHint": "!breach_clause_exists",
+            },
+        ),
+        AuditConfigItem(
+            id="rule_004",
+            name="账户信息缺失",
+            description="当合同中未识别到账户信息时触发。",
+            enabled=True,
+            riskPrompt="检查合同是否提供了收款账户信息，缺失时提示付款执行风险。",
+            toolSource=[RelationToolSource.RULE_ENGINE_FUTURE, RelationToolSource.MODEL_INFERENCE],
+            priority=RelationPriority.MEDIUM,
+            configType=AuditConfigType.RULE_CHECK,
+            rulePayload={
+                "ruleId": "missing_account_info",
+                "severity": "medium",
+                "expectedFacts": ["账户信息"],
+                "extractFields": [
+                    {"label": "账户信息", "description": "提取开户名、开户行、账号等账户字段"},
+                ],
+                "expressionHint": "account_info in [null, '']",
+            },
+        ),
+        AuditConfigItem(
+            id="rule_005",
+            name="有金额但缺少付款安排",
+            description="当已识别合同金额但未识别付款条款时触发。",
+            enabled=True,
+            riskPrompt="检查合同是否存在金额约定但未写明付款安排，提示履约结算风险。",
+            toolSource=[RelationToolSource.RULE_ENGINE_FUTURE, RelationToolSource.MODEL_INFERENCE],
+            priority=RelationPriority.HIGH,
+            configType=AuditConfigType.RULE_CHECK,
+            rulePayload={
+                "ruleId": "amount_present_but_payment_missing",
+                "severity": "high",
+                "expectedFacts": ["合同金额", "付款条件"],
+                "extractFields": [
+                    {"label": "合同金额", "description": "提取合同总金额、含税金额或价税合计"},
+                    {"label": "付款条件", "description": "提取付款节点、付款比例和支付方式"},
+                ],
+                "expressionHint": "contract_amount_exists && !payment_clause_exists",
+            },
+        ),
     ]
 
 

@@ -58,9 +58,9 @@ class VerificationAgent:
                     VerificationItem(
                         id=f"verify_required_{index:03d}",
                         name=f"{label}完整性校验",
-                        method="条款标签识别 + 原文证据定位",
+                        method="条款识别 / 原文证据定位",
                         status=VerificationStatus.PASS,
-                        description=f"已识别到 {label}，并建立原文证据映射。",
+                        description=f"已识别到 {label}，并建立了原文证据映射。",
                         relatedClauseIds=[clause.id],
                         relatedEvidenceIds=[clause.evidenceId] if clause.evidenceId else [],
                     )
@@ -70,9 +70,9 @@ class VerificationAgent:
                     VerificationItem(
                         id=f"verify_required_{index:03d}",
                         name=f"{label}完整性校验",
-                        method="条款标签识别 + 原文证据定位",
+                        method="条款识别 / 原文证据定位",
                         status=VerificationStatus.FAIL,
-                        description=f"未识别到 {label} 条款，建议人工复核合同原文。",
+                        description=f"未识别到 {label}。建议回看合同原文并人工复核是否缺失。",
                     )
                 )
 
@@ -87,9 +87,9 @@ class VerificationAgent:
                 VerificationItem(
                     id=f"verify_keyword_{clause.id}",
                     name=f"{clause.label}关键词一致性校验",
-                    method="关键词命中 + 语义对照",
+                    method="关键词命中 / 语义对照",
                     status=status,
-                    description=f"命中关键词：{'、'.join(hits) if hits else '未命中核心关键词'}。",
+                    description=f"命中关键词：{('、'.join(hits)) if hits else '未命中核心关键词'}。",
                     relatedClauseIds=[clause.id],
                     relatedEvidenceIds=[clause.evidenceId] if clause.evidenceId else [],
                 )
@@ -103,7 +103,7 @@ class VerificationAgent:
                     name="低置信度项目复核提示",
                     method="置信度阈值检查",
                     status=VerificationStatus.WARNING,
-                    description=f"发现 {len(low_confidence)} 项低置信度条款，建议重点复核。",
+                    description=f"发现 {len(low_confidence)} 条低置信度条款，建议重点复核。",
                     relatedClauseIds=[clause.id for clause in low_confidence],
                     relatedEvidenceIds=[clause.evidenceId for clause in low_confidence if clause.evidenceId],
                 )
@@ -120,6 +120,7 @@ class VerificationAgent:
                     description=f"发现 {len(external_audits)} 项关注事项需要结合外部数据进一步核验。",
                     relatedClauseIds=sorted({clause_id for item in external_audits for clause_id in item.evidenceClauseIds}),
                     needExternalTool=True,
+                    source="external_dependency",
                 )
             )
 
@@ -128,14 +129,135 @@ class VerificationAgent:
                 VerificationItem(
                     id="verify_structure",
                     name="章节结构校验",
-                    method="章节识别 + 页码映射",
+                    method="章节识别 / 页码映射",
                     status=VerificationStatus.PASS,
-                    description=f"共识别 {len(sections)} 个章节，并完成页码映射。",
+                    description=f"共识别 {len(sections)} 个章节，并完成了顺序和页码映射。",
                 )
             )
 
-        rule_items = self._build_engine_rule_items(clauses=clauses, rule_results=rule_results)
-        items.extend(rule_items)
+        items.extend(self._build_engine_summary_items(rule_results))
+        items.extend(self._build_engine_rule_items(clauses=clauses, rule_results=rule_results))
+        return items
+
+    @staticmethod
+    def _build_engine_summary_items(rule_results: dict[str, Any]) -> list[VerificationItem]:
+        status = str(rule_results.get("status") or "")
+        configured_rules = rule_results.get("configuredRules") or []
+        matched_rules = rule_results.get("matchedRules") or []
+        missing_rules = rule_results.get("missingConfiguredRules") or []
+        unmatched_rules = rule_results.get("unmatchedReturnedRules") or []
+        raw = rule_results.get("raw") or {}
+        mode = str(rule_results.get("mode") or "remote_api")
+
+        if status == "no_rule_configs":
+            return [
+                VerificationItem(
+                    id="verify_rule_engine_no_config",
+                    name="规则引擎校验未启用",
+                    method="GoRules 规则引擎联调",
+                    status=VerificationStatus.WARNING,
+                    description="当前没有启用任何规则校验配置，本轮未执行规则引擎校验。",
+                    source="rule_engine",
+                    engineStatus=status,
+                    detail={"mode": mode},
+                )
+            ]
+
+        if status == "not_connected":
+            return [
+                VerificationItem(
+                    id="verify_rule_engine_not_connected",
+                    name="规则引擎未接入",
+                    method="GoRules 规则引擎联调",
+                    status=VerificationStatus.WARNING,
+                    description="规则引擎当前未接入，本轮仅使用模型抽取和基础校验结果。",
+                    source="rule_engine",
+                    engineStatus=status,
+                    detail={"mode": mode},
+                )
+            ]
+
+        if status == "engine_error":
+            return [
+                VerificationItem(
+                    id="verify_rule_engine_error",
+                    name="规则引擎调用失败",
+                    method="GoRules 规则引擎联调",
+                    status=VerificationStatus.WARNING,
+                    description=str(raw.get("message") or "规则引擎调用失败，本轮未能完成规则校验。"),
+                    source="rule_engine",
+                    engineStatus=status,
+                    detail={"mode": mode},
+                )
+            ]
+
+        items: list[VerificationItem] = []
+        if configured_rules:
+            if matched_rules:
+                items.append(
+                    VerificationItem(
+                        id="verify_rule_engine_summary",
+                        name="规则引擎执行结果",
+                        method="GoRules 规则引擎联调",
+                        status=VerificationStatus.WARNING,
+                        description=f"规则引擎已执行，本轮共命中 {len(matched_rules)} 条规则。",
+                        source="rule_engine",
+                        engineStatus=status,
+                        detail={"mode": mode, "matchedRuleCount": len(matched_rules)},
+                    )
+                )
+            else:
+                items.append(
+                    VerificationItem(
+                        id="verify_rule_engine_summary",
+                        name="规则引擎执行结果",
+                        method="GoRules 规则引擎联调",
+                        status=VerificationStatus.PASS,
+                        description="规则引擎已执行，当前未命中已配置规则。",
+                        source="rule_engine",
+                        engineStatus=status,
+                        detail={"mode": mode, "matchedRuleCount": 0},
+                    )
+                )
+
+        if missing_rules:
+            missing_text = "；".join(
+                f"{item.get('name', '未命名配置')} ({item.get('ruleId', 'unknown')})"
+                for item in missing_rules
+                if isinstance(item, dict)
+            )
+            items.append(
+                VerificationItem(
+                    id="verify_rule_engine_missing_configured_rules",
+                    name="规则配置未在引擎中生效",
+                    method="规则配置 / 引擎规则目录比对",
+                    status=VerificationStatus.WARNING,
+                    description=f"发现 {len(missing_rules)} 条规则配置在当前 GoRules 规则目录中不存在：{missing_text}。",
+                    source="rule_engine",
+                    engineStatus="missing_configured_rules",
+                    detail={"missingConfiguredRules": missing_rules},
+                )
+            )
+
+        if unmatched_rules:
+            unmatched_text = "；".join(
+                f"{item.get('ruleName') or item.get('ruleId') or '未命名规则'}"
+                for item in unmatched_rules
+                if isinstance(item, dict)
+            )
+            items.append(
+                VerificationItem(
+                    id="verify_rule_engine_unmatched_rules",
+                    name="规则引擎返回了未绑定的规则",
+                    method="规则返回映射检查",
+                    status=VerificationStatus.WARNING,
+                    description=f"规则引擎返回了 {len(unmatched_rules)} 条未绑定到当前审计配置的规则：{unmatched_text}。",
+                    source="rule_engine",
+                    engineStatus="unmatched_returned_rules",
+                    detail={"unmatchedReturnedRules": unmatched_rules},
+                )
+            )
+
         return items
 
     @staticmethod
@@ -167,6 +289,11 @@ class VerificationAgent:
                     description=str(item.get("reason") or "规则引擎命中了一个待复核条件。"),
                     relatedClauseIds=matched_clause_ids,
                     needExternalTool=False,
+                    source="rule_engine",
+                    configId=str(item.get("configId") or "") or None,
+                    ruleId=str(item.get("ruleId") or "") or None,
+                    engineStatus="hit",
+                    detail={"dependsOn": item.get("dependsOn") or []},
                 )
             )
         return items

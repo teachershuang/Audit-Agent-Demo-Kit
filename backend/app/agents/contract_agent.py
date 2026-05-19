@@ -179,14 +179,21 @@ class ContractAgent:
             )
         )
         self._bind_clause_audit_links(clauses, audit_focuses)
+        rule_engine_status = str(rule_results.get("status") or "unknown")
+        rule_engine_warning = rule_engine_status != "ok"
+        if rule_results.get("missingConfiguredRules") or rule_results.get("unmatchedReturnedRules"):
+            rule_engine_warning = True
         agent_steps.append(
             self._step(
                 "step_008",
                 "规则引擎校验",
-                AgentStepStatus.SUCCESS if rule_results.get("status") in {"ok", "no_rule_configs", "not_connected"} else AgentStepStatus.WARNING,
+                AgentStepStatus.WARNING if rule_engine_warning else AgentStepStatus.SUCCESS,
                 260,
                 f"{len(relations)} audit configs",
-                f"规则引擎状态 {rule_results.get('status', 'unknown')}，命中 {len(rule_results.get('matchedRules', []))} 条",
+                (
+                    f"规则引擎状态 {rule_engine_status}，命中 {len(rule_results.get('matchedRules', []))} 条；"
+                    f"失配配置 {len(rule_results.get('missingConfiguredRules', []))} 条"
+                ),
                 "gorules_adapter",
             )
         )

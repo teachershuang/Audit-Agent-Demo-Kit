@@ -47,10 +47,13 @@ class Settings(BaseSettings):
     clause_batch_size: int = 4
     key_fact_batch_size: int = 6
     gorules_enabled: bool = False
+    gorules_mode: str = "remote_api"
     gorules_base_url: str = ""
     gorules_api_key: str = ""
-    gorules_decision_path: str = "/api/decision"
+    gorules_decision_path: str = "/validate"
     gorules_timeout_seconds: int = 30
+    gorules_trace_enabled: bool = False
+    gorules_local_decision_file: str = "docs/gorules-contract-audit-decision.json"
 
     storage_dir: str = "uploads"
     ocr_cache_enabled: bool = True

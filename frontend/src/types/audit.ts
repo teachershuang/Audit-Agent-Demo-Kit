@@ -27,6 +27,11 @@ export interface VerificationItem {
   relatedClauseIds: string[];
   relatedEvidenceIds: string[];
   needExternalTool: boolean;
+  source?: string;
+  configId?: string | null;
+  ruleId?: string | null;
+  engineStatus?: string | null;
+  detail?: Record<string, unknown>;
 }
 
 export interface AgentStep {
