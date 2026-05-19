@@ -18,7 +18,7 @@ const statusTone = {
 function buildUserSummary(item: VerificationItem) {
   switch (item.status) {
     case "pass":
-      return "系统已经找到了足够支撑当前判断的证据，这一项可以继续向下查看。";
+      return "系统已经找到足够支撑当前判断的证据，这一项可以继续向下查看。";
     case "warning":
       return "系统识别到了线索，但完整性或一致性还不够稳，建议人工复核。";
     case "fail":
@@ -79,20 +79,14 @@ export function VerificationPanel({
             .map((clause) => `${clause?.label} / ${clause?.title}`);
 
           return (
-            <article
-              key={item.id}
-              id={`card-${item.id}`}
-              className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4"
-            >
+            <article key={item.id} id={`card-${item.id}`} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">校验结论</p>
                   <h3 className="mt-1 text-base font-semibold text-white">{item.name}</h3>
                   <p className="mt-2 text-sm leading-7 text-slate-300">{buildUserSummary(item)}</p>
                 </div>
-                <span
-                  className={`rounded-full border px-3 py-1 text-[11px] tracking-[0.12em] ${statusTone[item.status]}`}
-                >
+                <span className={`rounded-full border px-3 py-1 text-[11px] tracking-[0.12em] ${statusTone[item.status]}`}>
                   {statusMap[item.status]}
                 </span>
               </div>
@@ -104,9 +98,7 @@ export function VerificationPanel({
                 </div>
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">关联内容</div>
-                  <div className="mt-2 leading-7">
-                    {relatedLabels.length > 0 ? relatedLabels.join(" / ") : "当前没有直接关联到具体条款"}
-                  </div>
+                  <div className="mt-2 leading-7">{relatedLabels.length > 0 ? relatedLabels.join(" / ") : "当前没有直接关联到具体条款"}</div>
                 </div>
               </div>
 

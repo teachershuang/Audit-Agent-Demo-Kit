@@ -60,6 +60,10 @@ def build_default_audit_configs() -> list[AuditConfigItem]:
                 "ruleId": "payment_without_acceptance_gate",
                 "severity": "high",
                 "expectedClauses": ["付款条件", "验收标准"],
+                "extractFields": [
+                    {"label": "付款条件", "description": "提取付款触发条件、比例和节点"},
+                    {"label": "验收标准", "description": "提取验收是否作为付款前置条件"},
+                ],
                 "expressionHint": "payment_clause_exists && !acceptance_clause_mentions_payment_gate",
             },
         ),
@@ -76,6 +80,9 @@ def build_default_audit_configs() -> list[AuditConfigItem]:
                 "ruleId": "missing_contract_number",
                 "severity": "medium",
                 "expectedFacts": ["合同编号"],
+                "extractFields": [
+                    {"label": "合同编号", "description": "仅提取合同编号本身，不要返回合同名称"},
+                ],
                 "expressionHint": "contract_number in [null, '', '未提取']",
             },
         ),

@@ -20,7 +20,7 @@ export function ClauseTagList({
     {
       key: "user_configured",
       title: "用户配置标签",
-      description: "来自关系配置或专项关注项的定向识别结果。",
+      description: "来自审计配置或专项关注项的定向识别结果。",
       items: clauses.filter((clause) => clause.labelSource === "user_configured"),
     },
     {

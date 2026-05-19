@@ -16,16 +16,17 @@ const toolMap: Record<string, string> = {
   evidence_service: "证据定位引擎",
   audit_focus_agent: "关注事项生成器",
   verification_agent: "校验引擎",
+  gorules_adapter: "GoRules 规则引擎适配器",
 };
 
 function summarizeStep(step: AgentStep) {
-  if (step.name.includes("章节")) return "系统正在把合同重新整理成可阅读的章节结构。";
-  if (step.name.includes("条款")) return "系统正在识别付款、验收、违约等关键条款。";
-  if (step.name.includes("关键信息")) return "系统正在抽取主体、金额、期限等核心信息。";
-  if (step.name.includes("证据")) return "系统正在把模型结果回链到原文位置。";
-  if (step.name.includes("审计关注")) return "系统正在基于文本内容生成需重点关注的风险方向。";
-  if (step.name.includes("校验")) return "系统正在交叉检查结果是否完整、是否需要进一步核验。";
-  if (step.name.includes("文档")) return "系统正在判断文件类型并准备文本抽取链路。";
+  if (step.name.includes("章节")) return "系统正在把合同重新整理成可阅读的章节结构，并保持原始顺序。";
+  if (step.name.includes("条款")) return "系统正在识别付款、验收、违约等关键条款，并输出结构化字段。";
+  if (step.name.includes("关键信息")) return "系统正在抽取主体、编号、金额、期限等可直接引用的关键信息。";
+  if (step.name.includes("证据")) return "系统正在把模型结果回链到原文位置，建立可点击的证据高亮。";
+  if (step.name.includes("审计关注")) return "系统正在基于合同内容与审计配置生成需要重点关注的风险方向。";
+  if (step.name.includes("校验")) return "系统正在交叉检查规则结果、模型理解和证据链是否一致。";
+  if (step.name.includes("文档")) return "系统正在判断文件类型并准备合适的解析链路。";
   return step.outputSummary;
 }
 
@@ -40,7 +41,7 @@ export function AgentTimeline({ steps }: { steps: AgentStep[] }) {
           <div>
             <h3 className="text-base font-semibold text-white">系统处理过程</h3>
             <p className="mt-1 text-sm text-slate-300">
-              这里展示的不是底层技术细节，而是系统在当前合同上做了哪些关键动作。
+              这里展示的不是底层技术细节，而是系统在当前合同上完成了哪些关键动作。
             </p>
           </div>
         </div>

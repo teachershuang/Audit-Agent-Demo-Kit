@@ -31,16 +31,42 @@ export function ClauseCard({
             </span>
           </div>
           <h3 className="mt-1 text-base font-semibold text-white">{clause.title}</h3>
+          {clause.sectionTitle ? <p className="mt-1 text-xs text-slate-400">所属章节：{clause.sectionTitle}</p> : null}
         </div>
         <ConfidenceBadge value={clause.confidence} />
       </div>
 
       <p className="mt-3 text-sm leading-7 text-slate-300">{clause.summary}</p>
+
+      {clause.references && clause.references.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {clause.references.map((reference) => (
+            <span key={reference} className="rounded-full border border-cyan-400/16 bg-cyan-400/6 px-3 py-1 text-xs text-cyan-100">
+              引用 {reference}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {clause.structuredFields && Object.keys(clause.structuredFields).length > 0 ? (
+        <div className="mt-3 rounded-2xl border border-cyan-400/16 bg-cyan-400/6 px-4 py-3 text-sm text-cyan-50/90">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-cyan-200/60">结构化字段</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {Object.entries(clause.structuredFields).map(([key, value]) => (
+              <span key={key} className="rounded-full border border-white/10 bg-slate-950/25 px-3 py-1 text-xs text-slate-200">
+                {key}：{value}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {clause.discoveryReason ? (
         <div className="mt-3 rounded-2xl border border-cyan-400/16 bg-cyan-400/6 px-4 py-3 text-sm leading-7 text-cyan-50/90">
           {clause.discoveryReason}
         </div>
       ) : null}
+
       <blockquote className="mt-3 rounded-2xl border border-white/8 bg-slate-950/30 px-4 py-3 text-sm leading-7 text-slate-300">
         {clause.rawText}
       </blockquote>

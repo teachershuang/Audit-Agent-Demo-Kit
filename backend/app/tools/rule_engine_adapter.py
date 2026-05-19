@@ -24,16 +24,17 @@ class RuleEngineAdapter:
         rule_configs = [item for item in configs if item.enabled and item.configType == AuditConfigType.RULE_CHECK]
         if not rule_configs:
             return {"engine": "gorules", "status": "no_rule_configs", "matchedRules": [], "raw": None}
+
+        payload = self.build_rule_input(task_id, sections, clauses, key_facts, rule_configs)
         if not self.settings.gorules_enabled or not self.settings.gorules_base_url:
             return {
                 "engine": "gorules",
                 "status": "not_connected",
                 "matchedRules": [],
                 "raw": {"message": "GoRules 未接入，当前仅生成标准化规则输入。"},
-                "input": self.build_rule_input(task_id, sections, clauses, key_facts, rule_configs),
+                "input": payload,
             }
 
-        payload = self.build_rule_input(task_id, sections, clauses, key_facts, rule_configs)
         headers = {"Content-Type": "application/json"}
         if self.settings.gorules_api_key:
             headers["Authorization"] = f"Bearer {self.settings.gorules_api_key}"
@@ -66,14 +67,24 @@ class RuleEngineAdapter:
     ) -> dict[str, Any]:
         fact_map = self._fact_map(key_facts)
         clause_map = {item.coreLabel or item.label: item for item in clauses}
+
         return {
             "taskId": task_id,
             "contract": {
-                "contractNumber": fact_map.get("合同编号"),
+                "contractNumber": self._normalize_missing_value(fact_map.get("合同编号")),
                 "sectionCount": len(sections),
                 "clauseCount": len(clauses),
                 "sections": [
-                    {"id": item.id, "title": item.title, "page": item.page, "summary": item.summary}
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "level": item.level,
+                        "page": item.page,
+                        "sortOrder": item.sortOrder,
+                        "sectionCode": item.sectionCode,
+                        "sectionPath": item.sectionPath,
+                        "summary": item.summary,
+                    }
                     for item in sections
                 ],
                 "clauses": [
@@ -81,9 +92,15 @@ class RuleEngineAdapter:
                         "id": item.id,
                         "label": item.label,
                         "coreLabel": item.coreLabel,
+                        "labelSource": item.labelSource,
+                        "title": item.title,
+                        "sectionTitle": item.sectionTitle,
                         "page": item.page,
+                        "sortOrder": item.sortOrder,
                         "summary": item.summary,
                         "rawText": item.rawText[:1200],
+                        "references": item.references,
+                        "structuredFields": item.structuredFields,
                         "confidence": item.confidence,
                     }
                     for item in clauses
@@ -100,22 +117,29 @@ class RuleEngineAdapter:
                 ],
             },
             "entities": {
-                "partyA": fact_map.get("甲方"),
-                "partyB": fact_map.get("乙方"),
-                "partySummary": fact_map.get("甲乙方信息"),
-                "serviceContent": fact_map.get("服务内容"),
-                "contractAmount": fact_map.get("合同金额"),
-                "paymentTerms": fact_map.get("付款条件"),
-                "acceptanceTerms": fact_map.get("验收标准"),
-                "disputeTerms": fact_map.get("争议解决"),
-                "accountInfo": fact_map.get("账户信息"),
+                "partyA": self._normalize_missing_value(fact_map.get("甲方")),
+                "partyB": self._normalize_missing_value(fact_map.get("乙方")),
+                "partySummary": self._normalize_missing_value(fact_map.get("甲乙方信息")),
+                "subjectSummary": self._normalize_missing_value(fact_map.get("主体摘要")),
+                "serviceContent": self._normalize_missing_value(fact_map.get("服务内容")),
+                "contractAmount": self._normalize_missing_value(fact_map.get("合同金额")),
+                "paymentTerms": self._normalize_missing_value(fact_map.get("付款条件")),
+                "acceptanceTerms": self._normalize_missing_value(fact_map.get("验收标准")),
+                "performanceTerm": self._normalize_missing_value(fact_map.get("履约期限")),
+                "disputeTerms": self._normalize_missing_value(fact_map.get("争议解决")),
+                "accountInfo": self._normalize_missing_value(fact_map.get("账户信息")),
+            },
+            "factMap": {
+                key: value for key, value in fact_map.items() if self._normalize_missing_value(value) is not None
             },
             "derived": {
-                "hasContractNumber": bool(fact_map.get("合同编号") and fact_map.get("合同编号") != "未提取"),
+                "hasContractNumber": bool(self._normalize_missing_value(fact_map.get("合同编号"))),
                 "hasPaymentClause": "付款条件" in clause_map,
                 "hasAcceptanceClause": "验收标准" in clause_map,
                 "hasBreachClause": "违约责任" in clause_map,
                 "hasDisputeClause": "争议解决" in clause_map,
+                "hasAccountClause": "账户信息" in clause_map,
+                "crossReferences": self._collect_cross_references(clauses),
             },
             "auditConfigs": [
                 {
@@ -140,6 +164,31 @@ class RuleEngineAdapter:
         return result
 
     @staticmethod
+    def _normalize_missing_value(value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or cleaned in {"未提取", "待提取"}:
+            return None
+        return cleaned
+
+    @staticmethod
+    def _collect_cross_references(clauses: list[ClauseTag]) -> list[dict[str, Any]]:
+        references: list[dict[str, Any]] = []
+        for clause in clauses:
+            if not clause.references:
+                continue
+            references.append(
+                {
+                    "clauseId": clause.id,
+                    "label": clause.label,
+                    "page": clause.page,
+                    "references": clause.references,
+                }
+            )
+        return references
+
+    @staticmethod
     def _normalize_rule_matches(data: dict[str, Any], configs: list[AuditConfigItem]) -> list[dict[str, Any]]:
         config_map = {item.id: item for item in configs}
         raw_matches = data.get("matchedRules") or data.get("matches") or data.get("hits") or []
@@ -151,12 +200,13 @@ class RuleEngineAdapter:
                 continue
             config_id = str(item.get("configId") or item.get("id") or "").strip()
             config = config_map.get(config_id)
+            rule_payload = config.rulePayload if config and isinstance(config.rulePayload, dict) else {}
             normalized.append(
                 {
                     "configId": config_id or None,
-                    "ruleId": item.get("ruleId") or (config.rulePayload or {}).get("ruleId") if config else None,
+                    "ruleId": item.get("ruleId") or rule_payload.get("ruleId"),
                     "ruleName": item.get("ruleName") or item.get("name") or (config.name if config else "未命名规则"),
-                    "severity": item.get("severity") or ((config.rulePayload or {}).get("severity") if config else "medium"),
+                    "severity": item.get("severity") or rule_payload.get("severity") or "medium",
                     "decision": item.get("decision") or "hit",
                     "reason": item.get("reason") or item.get("message") or (config.description if config else ""),
                     "evidenceClauseIds": item.get("evidenceClauseIds") or [],

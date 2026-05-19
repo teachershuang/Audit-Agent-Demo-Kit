@@ -108,7 +108,7 @@ class ContractAgent:
         sections = await self.parser_agent.reconstruct_sections(extracted.pages)
         self._emit_progress(progress_callback, 72, "section_reconstruction", f"已识别 {len(sections)} 个章节。")
 
-        self._emit_progress(progress_callback, 76, "clause_tagging", "正在识别关键条款。")
+        self._emit_progress(progress_callback, 76, "clause_tagging", "正在识别关键条款并生成结构化条款结果。")
         clauses = await self.parser_agent.identify_clauses(extracted.pages, sections, relations)
         self._emit_progress(progress_callback, 82, "clause_tagging", f"已识别 {len(clauses)} 条关键条款。")
 
@@ -119,7 +119,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 720,
                 f"{len(extracted.pages)} pages",
-                f"Identified {len(sections)} sections",
+                f"识别出 {len(sections)} 个章节",
                 "qwen_service",
             )
         )
@@ -130,12 +130,12 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 980,
                 f"{len(sections)} sections",
-                f"Identified {len(clauses)} clauses",
+                f"识别出 {len(clauses)} 条条款",
                 "qwen_service",
             )
         )
 
-        key_facts = await self.parser_agent.extract_key_facts(extracted.pages, clauses)
+        key_facts = await self.parser_agent.extract_key_facts(extracted.pages, clauses, relations)
         self._emit_progress(progress_callback, 88, "fact_extraction", f"已抽取 {len(key_facts)} 项关键信息。")
         agent_steps.append(
             self._step(
@@ -144,7 +144,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 680,
                 f"{len(clauses)} clauses",
-                f"Extracted {len(key_facts)} key facts",
+                f"抽取出 {len(key_facts)} 项关键信息",
                 "qwen_service",
             )
         )
@@ -174,7 +174,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 210,
                 "sections / clauses / key facts",
-                f"Mapped {sum(len(page.evidences) for page in extracted.pages)} evidence references",
+                f"建立 {sum(len(page.evidences) for page in extracted.pages)} 个证据引用",
                 "evidence_service",
             )
         )
@@ -186,7 +186,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS if rule_results.get("status") in {"ok", "no_rule_configs", "not_connected"} else AgentStepStatus.WARNING,
                 260,
                 f"{len(relations)} audit configs",
-                f"Rule engine status: {rule_results.get('status', 'unknown')} / matches {len(rule_results.get('matchedRules', []))}",
+                f"规则引擎状态 {rule_results.get('status', 'unknown')}，命中 {len(rule_results.get('matchedRules', []))} 条",
                 "gorules_adapter",
             )
         )
@@ -197,7 +197,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 840,
                 f"{len(relations)} audit configs",
-                f"Generated {len(audit_focuses)} audit focus items",
+                f"生成 {len(audit_focuses)} 项审计关注点",
                 "audit_focus_agent",
             )
         )
@@ -216,7 +216,7 @@ class ContractAgent:
                 AgentStepStatus.SUCCESS,
                 180,
                 f"{len(clauses)} clauses / {len(audit_focuses)} audit items",
-                f"Built {len(verification_items)} verification records",
+                f"形成 {len(verification_items)} 条校验记录",
                 "verification_agent",
             )
         )

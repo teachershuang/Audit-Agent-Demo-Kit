@@ -38,14 +38,10 @@ interface ContractState {
   regenerateAudit: () => Promise<void>;
 }
 
-function deriveTabAndEntityFromEvidence(evidence: EvidenceRef): {
-  tab: AnalysisTab;
-  entity: ActiveEntity;
-} {
+function deriveTabAndEntityFromEvidence(evidence: EvidenceRef): { tab: AnalysisTab; entity: ActiveEntity } {
   if (evidence.sourceType === "section") {
     return { tab: "sections", entity: { kind: "section", id: evidence.sourceId } };
   }
-
   return { tab: "clauses", entity: { kind: "clause", id: evidence.sourceId } };
 }
 
@@ -60,7 +56,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
   auditFocuses: [],
   verificationItems: [],
   agentSteps: [],
-  activeTab: "sections",
+  activeTab: "relations",
   activePage: 1,
   selectedEvidenceId: null,
   activeEntity: null,
@@ -88,7 +84,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
     let taskId: string | null = null;
 
     const pollTask = async () => {
-      if (!taskId) return;
+      if (!taskId) return null;
       while (true) {
         try {
           const task = await api.getContractTask(taskId);
@@ -112,11 +108,12 @@ export const useContractStore = create<ContractState>((set, get) => ({
         verificationItems: [],
         agentSteps: [],
       });
+
       taskId = await api.uploadContract(file);
       const initialTask = await api.getContractTask(taskId);
       set({ task: initialTask });
 
-      await api.analyzeContract(taskId);
+      const analyzePayload = await api.analyzeContract(taskId);
       const finalTask = await pollTask();
       if (!finalTask) {
         throw new Error("未能获取解析任务状态。");
@@ -126,10 +123,8 @@ export const useContractStore = create<ContractState>((set, get) => ({
       }
 
       const result = await api.getContractResult(taskId);
-      const analyzePayload = await api.analyzeContract(taskId);
       const relations = await api.getRelations();
-      const selectedEvidenceId =
-        result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null;
+      const selectedEvidenceId = result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null;
 
       set({
         task: result.task,
@@ -193,7 +188,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
 
     try {
       set({ isBusy: true, error: null });
-      await api.analyzeContract(currentTask.taskId);
+      const analyzePayload = await api.analyzeContract(currentTask.taskId);
       const finalTask = await pollTask();
       if (!finalTask) {
         throw new Error("未能获取解析任务状态。");
@@ -202,7 +197,6 @@ export const useContractStore = create<ContractState>((set, get) => ({
         throw new Error(finalTask.stageDetail ?? "解析任务失败。");
       }
       const result = await api.getContractResult(currentTask.taskId);
-      const analyzePayload = await api.analyzeContract(currentTask.taskId);
       const relations = await api.getRelations();
       set({
         task: result.task,
@@ -211,6 +205,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
         auditFocuses: analyzePayload.auditFocuses ?? [],
         verificationItems: analyzePayload.verificationItems ?? [],
         agentSteps: analyzePayload.agentSteps ?? [],
+        activeTab: "sections",
         activePage: result.pages[0]?.page ?? 1,
         selectedEvidenceId: result.sections[0]?.evidenceId ?? result.pages[0]?.evidences[0]?.id ?? null,
         activeEntity: result.sections[0] ? { kind: "section", id: result.sections[0].id } : null,
@@ -234,16 +229,9 @@ export const useContractStore = create<ContractState>((set, get) => ({
   exportResult() {
     const { result, relations, auditFocuses, verificationItems, agentSteps } = get();
     if (!result) return;
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          { result, relations, auditFocuses, verificationItems, agentSteps },
-          null,
-          2,
-        ),
-      ],
-      { type: "application/json" },
-    );
+    const blob = new Blob([JSON.stringify({ result, relations, auditFocuses, verificationItems, agentSteps }, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -260,9 +248,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
   focusEvidence(evidenceId, tab, entity) {
     const result = get().result;
     if (!result) return;
-    const matchedPage = result.pages.find((page) =>
-      page.evidences.some((evidence) => evidence.id === evidenceId),
-    );
+    const matchedPage = result.pages.find((page) => page.evidences.some((evidence) => evidence.id === evidenceId));
     set({
       selectedEvidenceId: evidenceId,
       activeTab: tab,
@@ -283,14 +269,10 @@ export const useContractStore = create<ContractState>((set, get) => ({
 
   async saveRelation(relation) {
     const exists = get().relations.some((item) => item.id === relation.id);
-    const saved = exists
-      ? await api.updateRelation(relation.id, relation)
-      : await api.createRelation(relation);
+    const saved = exists ? await api.updateRelation(relation.id, relation) : await api.createRelation(relation);
 
     set({
-      relations: exists
-        ? get().relations.map((item) => (item.id === relation.id ? saved : item))
-        : [...get().relations, saved],
+      relations: exists ? get().relations.map((item) => (item.id === relation.id ? saved : item)) : [...get().relations, saved],
       activeEntity: { kind: "relation", id: saved.id },
       activeTab: "relations",
     });
@@ -301,8 +283,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
     const activeEntity = get().activeEntity;
     set({
       relations: get().relations.filter((item) => item.id !== relationId),
-      activeEntity:
-        activeEntity?.kind === "relation" && activeEntity.id === relationId ? null : activeEntity,
+      activeEntity: activeEntity?.kind === "relation" && activeEntity.id === relationId ? null : activeEntity,
     });
   },
 
@@ -320,7 +301,7 @@ export const useContractStore = create<ContractState>((set, get) => ({
       });
       await postFrontendLog("regenerate_audit_completed", undefined, { taskId: result.task.taskId });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "重新生成关注事项失败";
+      const message = error instanceof Error ? error.message : "重新生成关注点失败";
       await postFrontendLog("regenerate_audit_failed", message, { taskId: result.task.taskId }, "error");
       set({ error: message });
     } finally {

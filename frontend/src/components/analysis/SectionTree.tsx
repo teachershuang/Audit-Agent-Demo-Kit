@@ -27,16 +27,14 @@ export function SectionTree({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.22em] text-cyan-200/60">
-                L{section.level} · Page {section.page}
+                {section.sectionCode ?? `L${section.level}`} · Page {section.page}
               </p>
               <h3 className="mt-1 text-base font-semibold text-white">{section.title}</h3>
             </div>
             <ConfidenceBadge value={section.confidence} />
           </div>
           <p className="mt-3 text-sm leading-7 text-slate-300">{section.summary}</p>
-          <div className="mt-4 text-xs text-slate-400">
-            {section.evidenceId ? "已建立证据定位" : "缺少证据定位"}
-          </div>
+          <div className="mt-4 text-xs text-slate-400">{section.evidenceId ? "已建立证据定位" : "缺少证据定位"}</div>
         </button>
       ))}
     </div>

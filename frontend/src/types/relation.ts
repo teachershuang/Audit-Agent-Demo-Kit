@@ -6,6 +6,8 @@ export type RelationToolSource =
   | "internal_master_data_future"
   | "rpa_api_future";
 
+export type AuditConfigType = "relation_focus" | "rule_check" | "external_check";
+
 export interface RelationConfig {
   id: string;
   name: string;
@@ -14,4 +16,6 @@ export interface RelationConfig {
   riskPrompt: string;
   toolSource: RelationToolSource[];
   priority: "low" | "medium" | "high";
+  configType: AuditConfigType;
+  rulePayload?: Record<string, unknown> | null;
 }

@@ -39,12 +39,8 @@ export function HeaderBar({
             <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-cyan-200/70">
               Audit Intelligence Workbench
             </p>
-            <h1 className="mt-1 font-display text-2xl text-white md:text-[30px]">
-              合同智能解析与审计关注点 Agent
-            </h1>
-            <p className="mt-2 text-sm text-slate-300">
-              合同结构、关键条款、证据定位与审计关注事项统一呈现。
-            </p>
+            <h1 className="mt-1 font-display text-2xl text-white md:text-[30px]">合同智能解析与审计关注点 Agent</h1>
+            <p className="mt-2 text-sm text-slate-300">合同结构、关键条款、证据定位与审计关注事项统一呈现。</p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
                 合同编号 {contractNumber ?? "未提取"}
@@ -55,9 +51,7 @@ export function HeaderBar({
                 </span>
               ) : null}
             </div>
-            {task?.stageDetail ? (
-              <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p>
-            ) : null}
+            {task?.stageDetail ? <p className="mt-2 text-xs text-cyan-100/80">当前阶段：{task.stageDetail}</p> : null}
           </div>
         </div>
 

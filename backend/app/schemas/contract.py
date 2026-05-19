@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,9 @@ class ContractSection(BaseModel):
     page: int
     summary: str
     confidence: float
+    sortOrder: int = 0
+    sectionCode: str | None = None
+    sectionPath: str | None = None
     blockIds: list[str] = Field(default_factory=list)
     evidenceId: str | None = None
 
@@ -67,6 +71,11 @@ class ClauseTag(BaseModel):
     rawText: str
     page: int
     confidence: float
+    sortOrder: int = 0
+    sectionTitle: str | None = None
+    references: list[str] = Field(default_factory=list)
+    structuredFields: dict[str, Any] = Field(default_factory=dict)
+    anchorText: str | None = None
     blockIds: list[str] = Field(default_factory=list)
     evidenceId: str
     needHumanReview: bool = False

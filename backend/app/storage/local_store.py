@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-import asyncio
 from pathlib import Path
 from time import perf_counter
 from typing import Optional
@@ -55,11 +55,7 @@ class LocalStore:
             stageDetail="文件已接收，等待开始分析。",
             elapsedMs=0,
         )
-        record = TaskRecord(
-            task=task,
-            file_path=file_path,
-            use_builtin_example=use_builtin_example,
-        )
+        record = TaskRecord(task=task, file_path=file_path, use_builtin_example=use_builtin_example)
         self._tasks[task_id] = record
         return record
 

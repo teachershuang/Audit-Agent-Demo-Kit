@@ -92,12 +92,7 @@ export async function postFrontendLog(
   context?: Record<string, unknown>,
   level = "info",
 ) {
-  const payload = {
-    level,
-    event,
-    message,
-    context: context ?? {},
-  };
+  const payload = { level, event, message, context: context ?? {} };
 
   try {
     const baseUrl = await detectApiBaseUrl();
@@ -125,19 +120,14 @@ export const api = {
       type: file?.type ?? null,
     });
 
-    const data = await request<UploadResponse>("/api/contracts/upload", {
-      method: "POST",
-      body: formData,
-    });
+    const data = await request<UploadResponse>("/api/contracts/upload", { method: "POST", body: formData });
     await postFrontendLog("upload_contract_completed", undefined, { taskId: data.task_id });
     return data.task_id;
   },
 
   async analyzeContract(taskId: string): Promise<AnalyzeResponse> {
     await postFrontendLog("analyze_contract_started", undefined, { taskId });
-    const data = await request<AnalyzeResponse>(`/api/contracts/${taskId}/analyze`, {
-      method: "POST",
-    });
+    const data = await request<AnalyzeResponse>(`/api/contracts/${taskId}/analyze`, { method: "POST" });
     const normalized = normalizeAnalyzeResponse(data);
     await postFrontendLog("analyze_contract_completed", undefined, {
       taskId,
@@ -178,9 +168,7 @@ export const api = {
 
   async deleteRelation(relationId: string): Promise<void> {
     const baseUrl = await detectApiBaseUrl();
-    const response = await fetch(`${baseUrl}/api/config/relations/${relationId}`, {
-      method: "DELETE",
-    });
+    const response = await fetch(`${baseUrl}/api/config/relations/${relationId}`, { method: "DELETE" });
     if (!response.ok) {
       throw new Error(await response.text());
     }

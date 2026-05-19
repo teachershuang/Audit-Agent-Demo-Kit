@@ -59,15 +59,12 @@ function App() {
     }
   }, [activeEntity, activeTab]);
 
-  const contractNumber = useMemo(
-    () => deriveContractNumber(result?.keyFacts ?? []),
-    [result?.keyFacts],
-  );
+  const contractNumber = useMemo(() => deriveContractNumber(result?.keyFacts ?? []), [result?.keyFacts]);
 
   const leftPanel = !result ? (
     isBusy ? (
       <LoadingState
-        label={task?.currentStage === "ocr_running" ? "正在识别扫描页文本..." : "正在启动分析任务..."}
+        label={task?.currentStage === "ocr_running" ? "正在识别扫描页面文本..." : "正在启动分析任务..."}
         detail={task?.stageDetail ?? "正在准备文档并调度解析链路。"}
         progress={task?.progressPercent ?? 0}
       />
@@ -92,42 +89,27 @@ function App() {
     />
   );
 
-  const rightPanel = !result ? (
-    isBusy ? (
-      <LoadingState
-        label="等待解析结果..."
-        detail={task?.stageDetail ?? "章节、条款、证据与关注事项正在生成。"}
-        progress={task?.progressPercent ?? 0}
-      />
-    ) : (
-      <EmptyState
-        title="结果区待加载"
-        description="上传或快速载入合同后，这里会显示章节还原、条款标签、关系配置、审计关注点和证据链。"
-      />
-    )
-  ) : (
+  const rightPanel = (
     <AnalysisTabs
       activeTab={activeTab}
       activeEntity={activeEntity}
-      sections={result.sections}
-      clauses={result.clauses}
-      keyFacts={result.keyFacts}
+      sections={result?.sections ?? []}
+      clauses={result?.clauses ?? []}
+      keyFacts={result?.keyFacts ?? []}
       contractNumber={contractNumber}
       relations={relations}
       auditFocuses={auditFocuses}
       verificationItems={verificationItems}
       agentSteps={agentSteps}
+      hasResult={Boolean(result)}
+      isBusy={isBusy}
       onTabChange={setActiveTab}
       onSectionSelect={(section) =>
-        section.evidenceId
-          ? focusEvidence(section.evidenceId, "sections", { kind: "section", id: section.id })
-          : undefined
+        section.evidenceId ? focusEvidence(section.evidenceId, "sections", { kind: "section", id: section.id }) : undefined
       }
-      onClauseSelect={(clause) =>
-        focusEvidence(clause.evidenceId, "clauses", { kind: "clause", id: clause.id })
-      }
+      onClauseSelect={(clause) => focusEvidence(clause.evidenceId, "clauses", { kind: "clause", id: clause.id })}
       onAuditSelect={(focus) => {
-        const relatedClause = result.clauses.find((item) => item.id === focus.evidenceClauseIds[0]);
+        const relatedClause = result?.clauses.find((item) => item.id === focus.evidenceClauseIds[0]);
         if (relatedClause) {
           focusEvidence(relatedClause.evidenceId, "audit", { kind: "audit", id: focus.id });
         }
@@ -167,9 +149,7 @@ function App() {
     </footer>
   ) : (
     <footer className="rounded-[24px] border border-dashed border-white/8 px-5 py-4 text-sm text-slate-400">
-      {isBusy
-        ? `处理中 ${currentTask?.progressPercent ?? 0}% · ${currentTask?.stageDetail ?? "等待服务返回进度"}`
-        : "工作台已就绪"}
+      {isBusy ? `处理中：${currentTask?.progressPercent ?? 0}% · ${currentTask?.stageDetail ?? "等待服务返回进度"}` : "工作台已就绪，可先配置审计策略再上传合同。"}
     </footer>
   );
 

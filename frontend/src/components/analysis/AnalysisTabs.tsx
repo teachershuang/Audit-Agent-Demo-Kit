@@ -20,7 +20,7 @@ const tabItems: Array<{
   { id: "relations", label: "审计配置", shortLabel: "审计配置", icon: GitBranch },
   { id: "audit", label: "审计关注点", shortLabel: "审计关注点", icon: Radar },
   { id: "verification", label: "校验证据链", shortLabel: "校验证据链", icon: ShieldCheck },
-  { id: "logs", label: "Agent 过程日志", shortLabel: "Agent 过程", icon: Workflow },
+  { id: "logs", label: "Agent 过程", shortLabel: "Agent 过程", icon: Workflow },
 ];
 
 interface AnalysisTabsProps {
@@ -34,6 +34,8 @@ interface AnalysisTabsProps {
   auditFocuses: AuditFocus[];
   verificationItems: VerificationItem[];
   agentSteps: AgentStep[];
+  hasResult: boolean;
+  isBusy: boolean;
   onTabChange: (tab: AnalysisTab) => void;
   onSectionSelect: (section: ContractSection) => void;
   onClauseSelect: (clause: ClauseTag) => void;
@@ -50,6 +52,21 @@ const overviewSlots = [
   { title: "服务内容", labels: ["服务内容"] },
 ] as const;
 
+function EmptyTabPanel({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-[22px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-8">
+      <div className="text-sm font-medium text-white">{title}</div>
+      <div className="mt-2 text-sm leading-7 text-slate-400">{description}</div>
+    </div>
+  );
+}
+
 export function AnalysisTabs({
   activeTab,
   activeEntity,
@@ -61,6 +78,8 @@ export function AnalysisTabs({
   auditFocuses,
   verificationItems,
   agentSteps,
+  hasResult,
+  isBusy,
   onTabChange,
   onSectionSelect,
   onClauseSelect,
@@ -79,9 +98,7 @@ export function AnalysisTabs({
         fact = {
           id: "overview_parties",
           label: "甲乙方信息",
-          value: [partyA ? `甲方：${partyA.value}` : "", partyB ? `乙方：${partyB.value}` : ""]
-            .filter(Boolean)
-            .join("；"),
+          value: [partyA ? `甲方：${partyA.value}` : "", partyB ? `乙方：${partyB.value}` : ""].filter(Boolean).join("；"),
           page: partyA?.page ?? partyB?.page ?? 1,
           confidence: Math.max(partyA?.confidence ?? 0, partyB?.confidence ?? 0),
           evidenceId: partyA?.evidenceId ?? partyB?.evidenceId ?? null,
@@ -97,15 +114,69 @@ export function AnalysisTabs({
     };
   });
 
+  const renderActiveTab = () => {
+    if (activeTab === "relations") {
+      return (
+        <RelationConfigPanel
+          relations={relations}
+          activeId={activeEntity?.kind === "relation" ? activeEntity.id : null}
+          onSave={onRelationSave}
+          onDelete={onRelationDelete}
+          onRegenerateAudit={onRegenerateAudit}
+        />
+      );
+    }
+
+    if (!hasResult) {
+      if (activeTab === "sections") {
+        return <EmptyTabPanel title="等待合同上传" description="上传合同后，这里会按合同原始顺序展示章节结构，并保留条、款、附件等层级信息。" />;
+      }
+      if (activeTab === "clauses") {
+        return <EmptyTabPanel title="等待条款识别" description="上传合同后，这里会展示结构化条款标签、引用关系和供规则引擎使用的短字段。" />;
+      }
+      if (activeTab === "audit") {
+        return <EmptyTabPanel title="等待审计关注点生成" description="上传合同并完成解析后，这里会同时展示用户配置触发和 Agent 主动发现的关注方向。" />;
+      }
+      if (activeTab === "verification") {
+        return <EmptyTabPanel title="等待校验证据链" description="合同解析完成后，这里会展示规则命中、模型校验和证据链说明。" />;
+      }
+      return <EmptyTabPanel title="等待 Agent 过程日志" description="上传合同后，这里会显示每一步解析动作、所用工具和产出摘要。" />;
+    }
+
+    if (activeTab === "sections") {
+      return (
+        <SectionTree
+          sections={sections}
+          activeId={activeEntity?.kind === "section" ? activeEntity.id : null}
+          onSelect={onSectionSelect}
+        />
+      );
+    }
+    if (activeTab === "clauses") {
+      return (
+        <ClauseTagList
+          clauses={clauses}
+          activeId={activeEntity?.kind === "clause" ? activeEntity.id : null}
+          onSelect={onClauseSelect}
+        />
+      );
+    }
+    if (activeTab === "audit") {
+      return <AuditFocusList items={auditFocuses} activeId={activeEntity?.kind === "audit" ? activeEntity.id : null} onSelect={onAuditSelect} />;
+    }
+    if (activeTab === "verification") {
+      return <VerificationPanel items={verificationItems} clauses={clauses} />;
+    }
+    return <AgentTimeline steps={agentSteps} />;
+  };
+
   return (
     <div className="glass-panel flex h-full min-h-[720px] flex-col rounded-[28px] border border-white/8 p-4">
       <div className="border-b border-white/8 pb-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200/70">
-          Audit Intelligence Dashboard
-        </p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200/70">Audit Intelligence Dashboard</p>
         <h2 className="mt-1 font-display text-xl text-white">智能解析结果</h2>
         <p className="mt-2 text-sm text-slate-300">
-          按章节、条款、审计配置、关注事项、校验与过程分区查看，右侧分析不会再拖动左侧原件区。
+          章节区和条款区职责分开：章节负责顺序还原，条款负责结构化理解、引用关系与规则输入准备。
         </p>
         <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1.3fr)_repeat(3,minmax(0,1fr))]">
           {overviewCards.map((card, index) => (
@@ -119,9 +190,7 @@ export function AnalysisTabs({
               <div className={`mt-2 line-clamp-3 text-sm ${card.muted ? "text-slate-400" : "text-white"}`}>
                 {card.title === "合同编号" ? contractNumber ?? "未提取" : card.value}
               </div>
-              {!card.muted ? (
-                <div className="mt-2 text-[11px] text-cyan-100/75">置信度 {Math.round(card.confidence * 100)}%</div>
-              ) : null}
+              {!card.muted ? <div className="mt-2 text-[11px] text-cyan-100/75">置信度 {Math.round(card.confidence * 100)}%</div> : null}
             </div>
           ))}
         </div>
@@ -151,42 +220,13 @@ export function AnalysisTabs({
         </div>
       </div>
 
-      <div className="thin-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-        {activeTab === "sections" ? (
-          <SectionTree
-            sections={sections}
-            activeId={activeEntity?.kind === "section" ? activeEntity.id : null}
-            onSelect={onSectionSelect}
-          />
-        ) : null}
-        {activeTab === "clauses" ? (
-          <ClauseTagList
-            clauses={clauses}
-            activeId={activeEntity?.kind === "clause" ? activeEntity.id : null}
-            onSelect={onClauseSelect}
-          />
-        ) : null}
-        {activeTab === "relations" ? (
-          <RelationConfigPanel
-            relations={relations}
-            activeId={activeEntity?.kind === "relation" ? activeEntity.id : null}
-            onSave={onRelationSave}
-            onDelete={onRelationDelete}
-            onRegenerateAudit={onRegenerateAudit}
-          />
-        ) : null}
-        {activeTab === "audit" ? (
-          <AuditFocusList
-            items={auditFocuses}
-            activeId={activeEntity?.kind === "audit" ? activeEntity.id : null}
-            onSelect={onAuditSelect}
-          />
-        ) : null}
-        {activeTab === "verification" ? (
-          <VerificationPanel items={verificationItems} clauses={clauses} />
-        ) : null}
-        {activeTab === "logs" ? <AgentTimeline steps={agentSteps} /> : null}
-      </div>
+      {isBusy && !hasResult ? (
+        <div className="mt-4 rounded-2xl border border-cyan-400/16 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-50/90">
+          合同正在解析中，审计配置仍可查看；建议在当前任务完成后再修改配置并重新生成关注点。
+        </div>
+      ) : null}
+
+      <div className="thin-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">{renderActiveTab()}</div>
     </div>
   );
 }

@@ -1,13 +1,6 @@
 export type TaskStatus = "pending_upload" | "processing" | "completed" | "needs_review";
 export type AnalysisTab = "sections" | "clauses" | "relations" | "audit" | "verification" | "logs";
 
-export interface BoundingBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface EvidenceRef {
   id: string;
   page: number;
@@ -28,7 +21,10 @@ export interface ContractSection {
   page: number;
   summary: string;
   confidence: number;
-  evidenceId?: string;
+  sortOrder?: number;
+  sectionCode?: string | null;
+  sectionPath?: string | null;
+  evidenceId?: string | null;
 }
 
 export interface ClauseTag {
@@ -41,6 +37,11 @@ export interface ClauseTag {
   rawText: string;
   page: number;
   confidence: number;
+  sortOrder?: number;
+  sectionTitle?: string | null;
+  references?: string[];
+  structuredFields?: Record<string, string>;
+  anchorText?: string | null;
   evidenceId: string;
   needHumanReview: boolean;
   discoveryReason?: string | null;
