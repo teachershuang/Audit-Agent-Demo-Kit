@@ -1,10 +1,15 @@
 export type RiskLevel = "low" | "medium" | "high" | "pending_verification";
 export type VerificationStatus = "pass" | "warning" | "fail" | "external_pending";
+export type AuditFocusSource =
+  | "user_rule_check"
+  | "user_relation_check"
+  | "user_external_check"
+  | "agent_discovered";
 
 export interface AuditFocus {
   id: string;
   title: string;
-  focusSource: "relation_config" | "agent_discovered" | "hybrid";
+  focusSource: AuditFocusSource;
   matchedRelationIds: string[];
   riskLevel: RiskLevel;
   reason: string;

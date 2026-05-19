@@ -1,6 +1,33 @@
 import type { AuditFocus } from "../../types/audit";
 import { AuditFocusCard } from "./AuditFocusCard";
 
+const focusGroups: Array<{
+  key: AuditFocus["focusSource"];
+  title: string;
+  description: string;
+}> = [
+  {
+    key: "user_rule_check",
+    title: "用户配置-规则校验",
+    description: "这部分关注点来自你配置的规则校验项，强调制度化、可重复执行的检查口径。",
+  },
+  {
+    key: "user_relation_check",
+    title: "用户配置-关系校验",
+    description: "这部分关注点来自你配置的关系型核验策略，强调主体、供应商、付款链路等关系线索。",
+  },
+  {
+    key: "user_external_check",
+    title: "用户配置-外部校验",
+    description: "这部分关注点需要外部数据、主数据、知识图谱或业务系统配合才能进一步确认。",
+  },
+  {
+    key: "agent_discovered",
+    title: "Agent 发现",
+    description: "这部分不是你预设的检查项，而是 Agent 基于合同内容主动识别出的关注方向。",
+  },
+];
+
 export function AuditFocusList({
   items,
   activeId,
@@ -10,26 +37,12 @@ export function AuditFocusList({
   activeId: string | null;
   onSelect: (focus: AuditFocus) => void;
 }) {
-  const groups = [
-    {
-      key: "relation_config",
-      title: "用户关注项触发",
-      description: "由关系配置直接触发，便于展示你主动关心的核验方向。",
-      items: items.filter((item) => item.focusSource === "relation_config"),
-    },
-    {
-      key: "hybrid",
-      title: "配置 + Agent 共同触发",
-      description: "既命中了用户配置，也有 Agent 的额外语义判断支撑。",
-      items: items.filter((item) => item.focusSource === "hybrid"),
-    },
-    {
-      key: "agent_discovered",
-      title: "Agent 主动发现",
-      description: "不是用户显式配置，但模型认为值得关注的方向。",
-      items: items.filter((item) => item.focusSource === "agent_discovered"),
-    },
-  ].filter((group) => group.items.length > 0);
+  const groups = focusGroups
+    .map((group) => ({
+      ...group,
+      items: items.filter((item) => item.focusSource === group.key),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <div className="space-y-5">

@@ -46,9 +46,10 @@ class AuditFocusAgent:
             raw_items.extend(self._pick_first_array(payload, ["auditFocuses", "关注事项", "audit_focuses"]))
 
         model_focuses = self._build_focuses_from_items(raw_items, clauses, relations, clause_map)
+        fallback_focuses = self._derive_relation_fallbacks(clauses, relations)
         if model_focuses:
-            return self._dedupe_audit_focuses(model_focuses + self._derive_relation_fallbacks(clauses, relations))
-        return self._dedupe_audit_focuses(self._derive_relation_fallbacks(clauses, relations))
+            return self._dedupe_audit_focuses(model_focuses + fallback_focuses)
+        return self._dedupe_audit_focuses(fallback_focuses)
 
     async def _request_focus_batch(
         self,
@@ -107,17 +108,13 @@ class AuditFocusAgent:
             {
                 "focus_hint": "履约、付款、验收、违约、交付闭环",
                 "clauses": [clause for clause in clauses if clause.coreLabel in performance_sensitive] or clauses[:8],
-                "relations": [],
+                "relations": [relation for relation in relations if relation.enabled],
                 "key_facts": [fact for fact in key_facts if fact.label in {"付款条件", "验收标准", "履约期限", "合同金额"}],
             },
             {
                 "focus_hint": "主体、账户、供应商关系、疑似关联、外部核验依赖",
                 "clauses": [clause for clause in clauses if clause.coreLabel in relation_sensitive] or clauses[-8:],
-                "relations": [
-                    relation
-                    for relation in relations
-                    if relation.enabled and relation.configType in {AuditConfigType.RELATION_FOCUS, AuditConfigType.EXTERNAL_CHECK}
-                ],
+                "relations": [relation for relation in relations if relation.enabled],
                 "key_facts": [fact for fact in key_facts if fact.label in {"甲方", "乙方", "甲乙方信息", "账户信息", "合同金额"}],
             },
         ]
@@ -130,7 +127,7 @@ class AuditFocusAgent:
         clause_map: dict[str, ClauseTag],
     ) -> list[AuditFocus]:
         valid_clause_ids = {clause.id for clause in clauses}
-        valid_relation_ids = {relation.id for relation in relations}
+        relation_map = {relation.id: relation for relation in relations}
         focuses: list[AuditFocus] = []
         for index, item in enumerate(items, start=1):
             clause_ids = [
@@ -143,13 +140,13 @@ class AuditFocusAgent:
             matched_relation_ids = [
                 relation_id
                 for relation_id in self._to_list(item.get("matchedRelationIds") or item.get("matched_relation_ids"))
-                if relation_id in valid_relation_ids
+                if relation_id in relation_map
             ]
             title = self._clean(item.get("title") or item.get("name"))
             reason = self._clean(item.get("reason"))
             if not title or not reason:
                 continue
-            focus_source = self._normalize_focus_source(item.get("focusSource"), matched_relation_ids)
+            focus_source = self._normalize_focus_source(item.get("focusSource"), matched_relation_ids, relation_map)
             location_text = self._clean(item.get("locationText") or item.get("location"))
             if not location_text:
                 location_text = self._build_location_text(clause_ids, clause_map)
@@ -185,10 +182,22 @@ class AuditFocusAgent:
         clause_by_core = {clause.coreLabel: clause for clause in clauses}
         focuses: list[AuditFocus] = []
         for relation in relations:
-            if not relation.enabled or relation.configType == AuditConfigType.RULE_CHECK:
+            if not relation.enabled:
                 continue
+
             related_clause_ids: list[str] = []
             depends_on: list[str] = []
+
+            expected_clauses = []
+            rule_payload = relation.rulePayload if isinstance(relation.rulePayload, dict) else {}
+            if relation.configType == AuditConfigType.RULE_CHECK:
+                expected_clauses = [str(item).strip() for item in rule_payload.get("expectedClauses", []) if str(item).strip()]
+            for label in expected_clauses:
+                clause = clause_by_core.get(label)
+                if clause:
+                    related_clause_ids.append(clause.id)
+                    depends_on.append(label)
+
             if "账户" in relation.name and clause_by_core.get("账户信息"):
                 related_clause_ids.append(clause_by_core["账户信息"].id)
                 depends_on.append("账户信息")
@@ -201,26 +210,30 @@ class AuditFocusAgent:
             if "项目" in relation.name and clause_by_core.get("服务/采购/工程内容"):
                 related_clause_ids.append(clause_by_core["服务/采购/工程内容"].id)
                 depends_on.append("服务/采购/工程内容")
+
             if not related_clause_ids:
                 continue
+
+            focus_source = self._focus_source_from_relation(relation)
+            title = relation.name if relation.name.endswith("核验") else f"{relation.name}核验"
             focuses.append(
                 AuditFocus(
                     id=f"audit_relation_{len(focuses) + 1:03d}",
-                    title=f"{relation.name}核验",
-                    focusSource="relation_config",
+                    title=title,
+                    focusSource=focus_source,
                     matchedRelationIds=[relation.id],
                     riskLevel=self._normalize_risk_level("pending_verification"),
-                    reason=f"该关注项来自用户配置的关系关注：{relation.description or relation.riskPrompt}",
+                    reason=f"该关注项来自用户配置：{relation.description or relation.riskPrompt}",
                     evidenceClauseIds=self._unique_preserve_order(related_clause_ids),
                     locationText=" / ".join(
                         f"第 {clause_by_core[label].page} 页" for label in depends_on if label in clause_by_core
                     ),
                     confidence=0.68,
-                    dependsOn=depends_on,
-                    currentBasis="当前基于合同文本和用户配置关系项生成，建议结合外部数据进一步核验。",
+                    dependsOn=self._unique_preserve_order(depends_on),
+                    currentBasis="当前基于合同文本和用户配置生成，建议结合规则引擎、外部数据或业务系统进一步核验。",
                     futureTools=self._normalize_future_tools([tool.value for tool in relation.toolSource]),
                     modelOnly=False,
-                    humanReviewSuggestion="建议结合企业关系库、主数据或业务系统进一步核验。",
+                    humanReviewSuggestion="建议结合配置所依赖的业务系统、主数据或规则引擎结果进一步复核。",
                 )
             )
         return focuses
@@ -238,16 +251,33 @@ class AuditFocusAgent:
         pages = sorted({clause_map[clause_id].page for clause_id in clause_ids if clause_id in clause_map})
         return " / ".join(f"第 {page} 页" for page in pages)
 
-    @staticmethod
-    def _normalize_focus_source(value: Any, matched_relation_ids: list[str]) -> str:
+    def _normalize_focus_source(
+        self,
+        value: Any,
+        matched_relation_ids: list[str],
+        relation_map: dict[str, RelationConfig],
+    ) -> str:
         text = str(value or "").strip().lower()
-        if text in {"relation_config", "user_configured"}:
-            return "relation_config"
-        if text == "hybrid":
-            return "hybrid"
+        if text in {"user_rule_check", "user_relation_check", "user_external_check", "agent_discovered"}:
+            return text
         if matched_relation_ids:
-            return "hybrid"
+            matched_relations = [relation_map[item] for item in matched_relation_ids if item in relation_map]
+            for relation in matched_relations:
+                if relation.configType == AuditConfigType.RULE_CHECK:
+                    return "user_rule_check"
+            for relation in matched_relations:
+                if relation.configType == AuditConfigType.EXTERNAL_CHECK:
+                    return "user_external_check"
+            return "user_relation_check"
         return "agent_discovered"
+
+    @staticmethod
+    def _focus_source_from_relation(relation: RelationConfig) -> str:
+        if relation.configType == AuditConfigType.RULE_CHECK:
+            return "user_rule_check"
+        if relation.configType == AuditConfigType.EXTERNAL_CHECK:
+            return "user_external_check"
+        return "user_relation_check"
 
     @staticmethod
     def _normalize_risk_level(value: Any) -> str:
@@ -290,7 +320,13 @@ class AuditFocusAgent:
             if current is None or item.confidence > current.confidence:
                 best_by_key[key] = item
         deduped = list(best_by_key.values())
-        deduped.sort(key=lambda item: (item.riskLevel, -item.confidence, item.title))
+        source_order = {
+            "user_rule_check": 0,
+            "user_relation_check": 1,
+            "user_external_check": 2,
+            "agent_discovered": 3,
+        }
+        deduped.sort(key=lambda item: (source_order.get(item.focusSource, 9), item.riskLevel, -item.confidence, item.title))
         for index, item in enumerate(deduped, start=1):
             item.id = f"audit_{index:03d}"
         return deduped
