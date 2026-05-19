@@ -20,6 +20,10 @@ function prettyRulePayload(value: Record<string, unknown> | null | undefined) {
   return value ? JSON.stringify(value, null, 2) : "";
 }
 
+const selectClassName =
+  "rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/35";
+const optionClassName = "bg-slate-950 text-slate-100";
+
 export function RelationConfigEditor({
   initialValue,
   onSubmit,
@@ -80,10 +84,10 @@ export function RelationConfigEditor({
           <select
             value={value.configType}
             onChange={(event) => setValue({ ...value, configType: event.target.value as AuditConfigType })}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/35"
+            className={selectClassName}
           >
             {typeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
+              <option key={option.value} value={option.value} className={optionClassName}>
                 {option.label}
               </option>
             ))}
@@ -91,11 +95,17 @@ export function RelationConfigEditor({
           <select
             value={value.priority}
             onChange={(event) => setValue({ ...value, priority: event.target.value as RelationConfig["priority"] })}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/35"
+            className={selectClassName}
           >
-            <option value="low">低优先级</option>
-            <option value="medium">中优先级</option>
-            <option value="high">高优先级</option>
+            <option value="low" className={optionClassName}>
+              低优先级
+            </option>
+            <option value="medium" className={optionClassName}>
+              中优先级
+            </option>
+            <option value="high" className={optionClassName}>
+              高优先级
+            </option>
           </select>
           <button
             type="button"
