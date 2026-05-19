@@ -79,6 +79,7 @@ class RuleEngineAdapter:
                 result_payload = self._extract_result_payload(data)
                 matched_rules = self._normalize_rule_matches(result_payload, configs)
                 unmatched_returned_rules = self._find_unmatched_returned_rules(matched_rules, configs)
+                log_paths = self._log_runtime_pair("local_zen", payload, data, "ok_with_warnings" if (missing_configured_rules or unmatched_returned_rules) else "ok")
                 result = self._build_result(
                     mode="local_zen",
                     status="ok_with_warnings" if (missing_configured_rules or unmatched_returned_rules) else "ok",
@@ -89,25 +90,28 @@ class RuleEngineAdapter:
                     missing_configured_rules=missing_configured_rules,
                     unmatched_returned_rules=unmatched_returned_rules,
                     matched_rules=matched_rules,
+                    log_paths=log_paths,
                 )
-                self._log_runtime_pair("local_zen", payload, result)
                 return result
             except Exception as exc:
+                error_raw = {"message": str(exc)}
+                log_paths = self._log_runtime_pair("local_zen", payload, error_raw, "engine_error")
                 result = self._build_result(
                     mode="local_zen",
                     status="engine_error",
                     payload=payload,
-                    raw={"message": str(exc)},
+                    raw=error_raw,
                     configured_rules=configured_rules,
                     available_rule_ids=available_rule_ids,
                     missing_configured_rules=missing_configured_rules,
                     unmatched_returned_rules=[],
                     matched_rules=[],
+                    log_paths=log_paths,
                 )
-                self._log_runtime_pair("local_zen", payload, result)
                 return result
 
         if not self.settings.gorules_enabled or not self.settings.gorules_base_url:
+            log_paths = self._log_runtime_pair(mode, payload, {"message": "GoRules 未接入，当前仅生成标准化规则输入。"}, "not_connected")
             result = self._build_result(
                 mode=mode,
                 status="not_connected",
@@ -118,8 +122,8 @@ class RuleEngineAdapter:
                 missing_configured_rules=missing_configured_rules,
                 unmatched_returned_rules=[],
                 matched_rules=[],
+                log_paths=log_paths,
             )
-            self._log_runtime_pair(mode, payload, result)
             return result
 
         headers = {"Content-Type": "application/json"}
@@ -146,6 +150,12 @@ class RuleEngineAdapter:
             result_payload = self._extract_result_payload(data)
             matched_rules = self._normalize_rule_matches(result_payload, configs)
             unmatched_returned_rules = self._find_unmatched_returned_rules(matched_rules, configs)
+            log_paths = self._log_runtime_pair(
+                "remote_api",
+                request_body,
+                data,
+                "ok_with_warnings" if (missing_configured_rules or unmatched_returned_rules) else "ok",
+            )
             result = self._build_result(
                 mode="remote_api",
                 status="ok_with_warnings" if (missing_configured_rules or unmatched_returned_rules) else "ok",
@@ -156,22 +166,24 @@ class RuleEngineAdapter:
                 missing_configured_rules=missing_configured_rules,
                 unmatched_returned_rules=unmatched_returned_rules,
                 matched_rules=matched_rules,
+                log_paths=log_paths,
             )
-            self._log_runtime_pair("remote_api", request_body, result)
             return result
         except Exception as exc:
+            error_raw = {"message": str(exc)}
+            log_paths = self._log_runtime_pair("remote_api", request_body, error_raw, "engine_error")
             result = self._build_result(
                 mode="remote_api",
                 status="engine_error",
                 payload=payload,
-                raw={"message": str(exc)},
+                raw=error_raw,
                 configured_rules=configured_rules,
                 available_rule_ids=available_rule_ids,
                 missing_configured_rules=missing_configured_rules,
                 unmatched_returned_rules=[],
                 matched_rules=[],
+                log_paths=log_paths,
             )
-            self._log_runtime_pair("remote_api", request_body, result)
             return result
 
     def build_rule_input(
@@ -516,6 +528,7 @@ class RuleEngineAdapter:
         missing_configured_rules: list[dict[str, Any]],
         unmatched_returned_rules: list[dict[str, Any]],
         matched_rules: list[dict[str, Any]],
+        log_paths: dict[str, str],
     ) -> dict[str, Any]:
         return {
             "engine": "gorules",
@@ -528,9 +541,11 @@ class RuleEngineAdapter:
             "unmatchedReturnedRules": unmatched_returned_rules,
             "raw": raw,
             "input": payload,
+            "requestLogPath": log_paths.get("request"),
+            "responseLogPath": log_paths.get("response"),
         }
 
-    def _log_runtime_pair(self, mode: str, request_payload: Any, response_payload: Any) -> None:
+    def _log_runtime_pair(self, mode: str, request_payload: Any, response_payload: Any, status: str) -> dict[str, str]:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         logs_dir = get_run_logs_dir() / "gorules-runtime"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -545,9 +560,8 @@ class RuleEngineAdapter:
                     "mode": mode,
                     "requestLog": str(request_path),
                     "responseLog": str(response_path),
-                    "status": response_payload.get("status"),
-                    "matchedRuleCount": len(response_payload.get("matchedRules") or []),
-                    "missingConfiguredRuleCount": len(response_payload.get("missingConfiguredRules") or []),
+                    "status": status,
                 }
             )
         )
+        return {"request": str(request_path), "response": str(response_path)}

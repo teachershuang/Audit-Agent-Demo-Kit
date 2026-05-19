@@ -26,7 +26,8 @@ class AuditFocusAgent:
         if not clauses:
             return []
 
-        groups = self._build_groups(clauses=clauses, relations=relations, key_facts=key_facts)
+        non_rule_relations = [relation for relation in relations if relation.enabled and relation.configType != AuditConfigType.RULE_CHECK]
+        groups = self._build_groups(clauses=clauses, relations=non_rule_relations, key_facts=key_facts)
         payloads = await asyncio.gather(
             *[
                 self._request_focus_batch(
@@ -45,11 +46,99 @@ class AuditFocusAgent:
         for payload in payloads:
             raw_items.extend(self._pick_first_array(payload, ["auditFocuses", "关注事项", "audit_focuses"]))
 
-        model_focuses = self._build_focuses_from_items(raw_items, clauses, relations, clause_map)
-        fallback_focuses = self._derive_relation_fallbacks(clauses, relations)
+        model_focuses = self._build_focuses_from_items(raw_items, clauses, non_rule_relations, clause_map)
+        fallback_focuses = self._derive_relation_fallbacks(clauses, non_rule_relations)
         if model_focuses:
             return self._dedupe_audit_focuses(model_focuses + fallback_focuses)
         return self._dedupe_audit_focuses(fallback_focuses)
+
+    def build_rule_engine_focuses(
+        self,
+        clauses: list[ClauseTag],
+        relations: list[RelationConfig],
+        rule_results: dict[str, Any],
+    ) -> list[AuditFocus]:
+        rule_relations = [relation for relation in relations if relation.enabled and relation.configType == AuditConfigType.RULE_CHECK]
+        if not rule_relations:
+            return []
+
+        clause_by_core = {clause.coreLabel: clause for clause in clauses}
+        clause_by_id = {clause.id: clause for clause in clauses}
+        matched_rules = rule_results.get("matchedRules") or []
+        missing_configured_rules = rule_results.get("missingConfiguredRules") or []
+        matched_rule_by_config_id = {
+            str(item.get("configId") or ""): item
+            for item in matched_rules
+            if isinstance(item, dict) and str(item.get("configId") or "").strip()
+        }
+        matched_rule_by_rule_id = {
+            str(item.get("ruleId") or ""): item
+            for item in matched_rules
+            if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
+        }
+        missing_rule_ids = {
+            str(item.get("ruleId") or "").strip()
+            for item in missing_configured_rules
+            if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
+        }
+
+        focuses: list[AuditFocus] = []
+        engine_status = str(rule_results.get("status") or "unknown")
+        request_log = str(rule_results.get("requestLogPath") or "").strip() or None
+        response_log = str(rule_results.get("responseLogPath") or "").strip() or None
+        for index, relation in enumerate(rule_relations, start=1):
+            rule_payload = relation.rulePayload if isinstance(relation.rulePayload, dict) else {}
+            rule_id = str(rule_payload.get("ruleId") or "").strip()
+            matched_rule = matched_rule_by_config_id.get(relation.id) or (matched_rule_by_rule_id.get(rule_id) if rule_id else None)
+            expected_labels = [str(item).strip() for item in rule_payload.get("expectedClauses", []) if str(item).strip()]
+            clause_ids = [
+                clause.id
+                for label in expected_labels
+                for clause in [clause_by_core.get(label)]
+                if clause is not None
+            ]
+            if matched_rule:
+                clause_ids = [
+                    clause_id
+                    for clause_id in matched_rule.get("evidenceClauseIds", [])
+                    if isinstance(clause_id, str) and clause_id in clause_by_id
+                ] or clause_ids
+            clause_ids = self._unique_preserve_order(clause_ids)
+            location_text = self._build_location_text(clause_ids, clause_by_id) if clause_ids else "规则引擎返回中未附带具体条款定位"
+            execution_status = self._resolve_rule_execution_status(engine_status, rule_id, missing_rule_ids, matched_rule is not None)
+            risk_level = self._rule_execution_risk_level(execution_status, matched_rule, rule_payload)
+            reason = self._build_rule_reason(execution_status, relation, matched_rule, engine_status)
+            human_review = self._build_rule_human_review(execution_status)
+
+            focuses.append(
+                AuditFocus(
+                    id=f"audit_rule_{index:03d}",
+                    title=relation.name,
+                    focusSource="user_rule_check",
+                    matchedRelationIds=[relation.id],
+                    riskLevel=risk_level,
+                    reason=reason,
+                    evidenceClauseIds=clause_ids,
+                    locationText=location_text,
+                    confidence=self._rule_execution_confidence(execution_status),
+                    dependsOn=self._rule_depends_on(relation, matched_rule),
+                    currentBasis="该关注点来自用户配置的规则校验，结果由 GoRules 规则引擎直接产出。",
+                    futureTools=self._normalize_future_tools([tool.value for tool in relation.toolSource]),
+                    modelOnly=False,
+                    humanReviewSuggestion=human_review,
+                    configId=relation.id,
+                    ruleId=rule_id or None,
+                    engineStatus=execution_status,
+                    detail={
+                        "requestLogPath": request_log,
+                        "responseLogPath": response_log,
+                        "executionStatus": execution_status,
+                        "matchedRule": matched_rule,
+                    },
+                )
+            )
+
+        return focuses
 
     async def _request_focus_batch(
         self,
@@ -108,13 +197,13 @@ class AuditFocusAgent:
             {
                 "focus_hint": "履约、付款、验收、违约、交付闭环",
                 "clauses": [clause for clause in clauses if clause.coreLabel in performance_sensitive] or clauses[:8],
-                "relations": [relation for relation in relations if relation.enabled],
+                "relations": [relation for relation in relations if relation.configType == AuditConfigType.RELATION_FOCUS],
                 "key_facts": [fact for fact in key_facts if fact.label in {"付款条件", "验收标准", "履约期限", "合同金额"}],
             },
             {
                 "focus_hint": "主体、账户、供应商关系、疑似关联、外部核验依赖",
                 "clauses": [clause for clause in clauses if clause.coreLabel in relation_sensitive] or clauses[-8:],
-                "relations": [relation for relation in relations if relation.enabled],
+                "relations": [relation for relation in relations if relation.configType in {AuditConfigType.RELATION_FOCUS, AuditConfigType.EXTERNAL_CHECK}],
                 "key_facts": [fact for fact in key_facts if fact.label in {"甲方", "乙方", "甲乙方信息", "账户信息", "合同金额"}],
             },
         ]
@@ -188,16 +277,6 @@ class AuditFocusAgent:
             related_clause_ids: list[str] = []
             depends_on: list[str] = []
 
-            expected_clauses = []
-            rule_payload = relation.rulePayload if isinstance(relation.rulePayload, dict) else {}
-            if relation.configType == AuditConfigType.RULE_CHECK:
-                expected_clauses = [str(item).strip() for item in rule_payload.get("expectedClauses", []) if str(item).strip()]
-            for label in expected_clauses:
-                clause = clause_by_core.get(label)
-                if clause:
-                    related_clause_ids.append(clause.id)
-                    depends_on.append(label)
-
             if "账户" in relation.name and clause_by_core.get("账户信息"):
                 related_clause_ids.append(clause_by_core["账户信息"].id)
                 depends_on.append("账户信息")
@@ -230,10 +309,11 @@ class AuditFocusAgent:
                     ),
                     confidence=0.68,
                     dependsOn=self._unique_preserve_order(depends_on),
-                    currentBasis="当前基于合同文本和用户配置生成，建议结合规则引擎、外部数据或业务系统进一步核验。",
+                    currentBasis="当前基于合同文本和用户配置生成，建议结合外部数据或业务系统进一步核验。",
                     futureTools=self._normalize_future_tools([tool.value for tool in relation.toolSource]),
                     modelOnly=False,
                     humanReviewSuggestion="建议结合配置所依赖的业务系统、主数据或规则引擎结果进一步复核。",
+                    configId=relation.id,
                 )
             )
         return focuses
@@ -313,9 +393,9 @@ class AuditFocusAgent:
 
     @staticmethod
     def _dedupe_audit_focuses(items: list[AuditFocus]) -> list[AuditFocus]:
-        best_by_key: dict[tuple[str, tuple[str, ...]], AuditFocus] = {}
+        best_by_key: dict[tuple[str, tuple[str, ...], str], AuditFocus] = {}
         for item in items:
-            key = (item.title, tuple(sorted(item.evidenceClauseIds)))
+            key = (item.title, tuple(sorted(item.evidenceClauseIds)), item.focusSource)
             current = best_by_key.get(key)
             if current is None or item.confidence > current.confidence:
                 best_by_key[key] = item
@@ -367,3 +447,87 @@ class AuditFocusAgent:
             seen.add(item)
             ordered.append(item)
         return ordered
+
+    @staticmethod
+    def _resolve_rule_execution_status(
+        engine_status: str,
+        rule_id: str,
+        missing_rule_ids: set[str],
+        matched: bool,
+    ) -> str:
+        if engine_status == "engine_error":
+            return "engine_error"
+        if engine_status == "not_connected":
+            return "not_connected"
+        if rule_id and rule_id in missing_rule_ids:
+            return "missing_in_engine"
+        if matched:
+            return "hit"
+        return "not_hit"
+
+    @staticmethod
+    def _rule_execution_risk_level(
+        execution_status: str,
+        matched_rule: dict[str, Any] | None,
+        rule_payload: dict[str, Any],
+    ) -> str:
+        if execution_status == "hit":
+            return str(matched_rule.get("severity") or rule_payload.get("severity") or "medium").lower()
+        if execution_status in {"engine_error", "not_connected", "missing_in_engine"}:
+            return "pending_verification"
+        return "low"
+
+    @staticmethod
+    def _rule_execution_confidence(execution_status: str) -> float:
+        mapping = {
+            "hit": 0.92,
+            "not_hit": 0.86,
+            "missing_in_engine": 0.72,
+            "engine_error": 0.58,
+            "not_connected": 0.58,
+        }
+        return mapping.get(execution_status, 0.66)
+
+    @staticmethod
+    def _rule_depends_on(relation: RelationConfig, matched_rule: dict[str, Any] | None) -> list[str]:
+        if matched_rule and matched_rule.get("dependsOn"):
+            return [str(item).strip() for item in matched_rule.get("dependsOn", []) if str(item).strip()]
+        rule_payload = relation.rulePayload if isinstance(relation.rulePayload, dict) else {}
+        depends_on = []
+        for item in rule_payload.get("extractFields", []):
+            if isinstance(item, dict):
+                label = str(item.get("label") or "").strip()
+                if label:
+                    depends_on.append(label)
+        return AuditFocusAgent._unique_preserve_order(depends_on)
+
+    @staticmethod
+    def _build_rule_reason(
+        execution_status: str,
+        relation: RelationConfig,
+        matched_rule: dict[str, Any] | None,
+        engine_status: str,
+    ) -> str:
+        if execution_status == "hit" and matched_rule:
+            return str(matched_rule.get("reason") or relation.description or relation.riskPrompt).strip()
+        if execution_status == "not_hit":
+            return "规则引擎已执行，本轮未命中该规则。"
+        if execution_status == "missing_in_engine":
+            return "当前审计配置存在，但规则引擎里没有对应 ruleId，这条规则本轮未真正生效。"
+        if execution_status == "not_connected":
+            return "规则引擎当前未接入，这条规则本轮没有执行。"
+        if execution_status == "engine_error":
+            return f"规则引擎执行失败，当前状态为 {engine_status}。"
+        return relation.description or relation.riskPrompt
+
+    @staticmethod
+    def _build_rule_human_review(execution_status: str) -> str:
+        if execution_status == "hit":
+            return "建议结合规则引擎返回结果、条款原文和业务单据进一步复核。"
+        if execution_status == "not_hit":
+            return "本轮规则未命中，但仍建议结合合同上下文确认是否存在边界情况。"
+        if execution_status == "missing_in_engine":
+            return "请先在 GoRules 中补齐该规则，再重新发起分析。"
+        if execution_status == "not_connected":
+            return "请先接通规则引擎服务，再重新执行这条规则校验。"
+        return "建议先排查规则引擎服务状态，再重新执行规则校验。"

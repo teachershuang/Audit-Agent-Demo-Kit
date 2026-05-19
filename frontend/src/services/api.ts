@@ -197,4 +197,9 @@ export const api = {
       agentSteps: data.agentSteps ?? [],
     };
   },
+
+  async getLogFile(path: string): Promise<{ path: string; content: string }> {
+    const encoded = encodeURIComponent(path);
+    return await request<{ path: string; content: string }>(`/api/logs/file?path=${encoded}`);
+  },
 };

@@ -164,7 +164,13 @@ class ContractAgent:
             relations=relations,
             key_facts=key_facts,
         )
-        _, rule_results, audit_focuses = await asyncio.gather(evidence_task, rule_task, audit_task)
+        _, rule_results, model_audit_focuses = await asyncio.gather(evidence_task, rule_task, audit_task)
+        rule_audit_focuses = self.audit_focus_agent.build_rule_engine_focuses(
+            clauses=clauses,
+            relations=relations,
+            rule_results=rule_results,
+        )
+        audit_focuses = self.audit_focus_agent._dedupe_audit_focuses(rule_audit_focuses + model_audit_focuses)
         self._emit_progress(progress_callback, 96, "audit_focus_generation", f"已生成 {len(audit_focuses)} 项审计关注方向，并完成证据 grounding。")
 
         agent_steps.append(

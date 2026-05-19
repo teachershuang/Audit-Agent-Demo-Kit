@@ -35,6 +35,10 @@ class AuditFocus(BaseModel):
     futureTools: list[str] = Field(default_factory=list)
     modelOnly: bool = True
     humanReviewSuggestion: str
+    configId: str | None = None
+    ruleId: str | None = None
+    engineStatus: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
 
 
 class VerificationItem(BaseModel):

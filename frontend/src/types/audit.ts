@@ -21,6 +21,10 @@ export interface AuditFocus {
   futureTools: string[];
   modelOnly: boolean;
   humanReviewSuggestion: string;
+  configId?: string | null;
+  ruleId?: string | null;
+  engineStatus?: string | null;
+  detail?: Record<string, unknown>;
 }
 
 export interface VerificationItem {
