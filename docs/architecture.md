@@ -1,129 +1,141 @@
-# 架构说明
+# Architecture
 
-## 定位
+## Overview
 
-这是一个面向审计与风控场景的合同智能理解 Agent 工作台，不是简单 OCR 工具，也不是固定规则系统。
+`Audit Agent Demo Kit` 由两个前端工作区和一个共享后端组成：
 
-设计原则：
+- 合同智能解析工作台
+- 智能审查底座
+- FastAPI Agent backend
 
-1. 所有模型输出必须带证据。
-2. 审计输出是关注事项，不是最终审计结论。
-3. 涉及关联交易、账户异常、供应商关系等高敏感事项时，必须表达为待核验。
-4. 架构必须预留规则引擎、知识图谱、企业关系数据和业务系统对接能力。
+二者共享任务、证据、关系配置、制度底座与规则校验结果。
 
-## 后端分层
+## High-Level Flow
 
-### `agents/`
-
-1. `contract_agent.py`
-   负责任务编排。
-2. `contract_parser_agent.py`
-   负责章节还原、条款标签识别、关键信息抽取。
-3. `audit_focus_agent.py`
-   负责生成审计关注事项。
-4. `verification_agent.py`
-   负责生成校验记录。
-5. `planner.py`
-   根据文档类型选择执行链路。
-
-### `services/`
-
-1. `document_service.py`
-   判断文档类型并规划解析链路。
-2. `ocr_service.py`
-   执行 PDF 文本抽取、页图渲染和 Qwen-VL OCR。
-3. `qwen_service.py`
-   统一管理 Qwen 文本与视觉模型调用、JSON 修复与 schema 校验。
-4. `evidence_service.py`
-   将模型输出锚定回原文块坐标。
-5. `confidence_service.py`
-   汇总章节、条款和关注事项的工程化置信度。
-6. `relation_config_service.py`
-   管理关系配置项。
-
-### `tools/`
-
-1. `qwen_llm_tool.py`
-2. `rule_engine_adapter.py`
-3. `knowledge_graph_adapter.py`
-4. `enterprise_relation_adapter.py`
-5. `rpa_api_adapter.py`
-
-这些 adapter 当前作为接入位保留，用于后续挂接外部系统，不在当前版本中写死业务结论。
-
-### `storage/`
-
-`local_store.py` 当前使用内存和本地文件元数据保存任务状态，适合本地演示和联调。后续可切换为 Redis、PostgreSQL 或对象存储。
-
-## 解析链路
-
-```text
-上传合同
-  -> 判断文件类型
-  -> PDF 文本抽取 / 页图渲染 / 图片 OCR
-  -> 章节还原
-  -> 条款标签识别
-  -> 关键信息抽取
-  -> 证据回链
-  -> 审计关注事项生成
-  -> 校验记录生成
-  -> 置信度汇总
+```mermaid
+flowchart TD
+    A["Upload Contract"] --> B["DocumentService"]
+    B --> C["OCRService"]
+    C --> D["ContractParserAgent"]
+    D --> E["EvidenceService"]
+    D --> F["AuditFocusAgent"]
+    D --> G["VerificationAgent"]
+    F --> H["RuleEngineAdapter"]
+    F --> I["RelationConfigService"]
+    G --> J["ConfidenceService"]
+    E --> K["Frontend Workbench"]
+    H --> K
+    J --> K
+    K --> L["Knowledge Base Review Pipeline"]
+    L --> M["Template Matcher"]
+    L --> N["Policy Retriever"]
+    L --> O["Rule Runner"]
+    L --> P["Review Report"]
 ```
 
-## 扫描件处理策略
+## Backend Modules
 
-当前扫描件链路：
+### Agents
 
-1. 先将 PDF 按页渲染成图像。
-2. 检查原生文本块质量。
-3. 对文本量不足的页面调用 `qwen-vl-plus` OCR。
-4. 统一转换为 `DocumentBlock`。
-5. 再由 `EvidenceService` 做证据锚定。
+- `ContractAgent`
+  - 编排整体合同解析链路
+  - 调度 OCR、结构理解、条款抽取、证据定位、关注点生成
+- `ContractParserAgent`
+  - 负责章节还原、条款标签识别、关键信息抽取
+  - 支持拆批并行与上下文压缩
+- `AuditFocusAgent`
+  - 根据条款、关系配置、规则结果生成审计关注点
+- `VerificationAgent`
+  - 生成必备条款、关键词一致性、外部数据依赖等校验结果
 
-这意味着扫描件可以做真实证据定位，但精度依赖 OCR 质量，通常更适合块级或段级高亮。
+### Services
 
-## 前端架构
+- `QwenService`
+  - 统一封装 OpenAI-compatible 文本 / 多模态调用
+  - 负责 JSON 修复、Schema 校验、缓存与耗时日志
+- `OCRService`
+  - 管理文字件与扫描件链路
+  - 支持 Qwen VL 与 Paddle 组合
+- `EvidenceService`
+  - 建立结果与原文 block / bbox 的映射
+- `RuntimeModelProfileService`
+  - 切换公网 / 内网模型档位
+- `ReportPreviewService`
+  - 制度审查报告预览与截图相关输出
 
-### 左侧合同原件区
+### Review / Knowledge Base
 
-`ContractViewer` 显示真实页图、证据高亮、页码切换和联动定位。
+- `ReviewPipeline`
+  - 串联分类、范本匹配、字段抽取、制度检索、规则执行和问题生成
+- `TemplateRetriever`
+  - 根据合同类别和结构化结果匹配范本
+- `PolicyRetriever`
+  - 检索制度条款
+- `RuleRunner`
+  - 运行本地或外部规则引擎规则
 
-### 右侧分析区
+## Frontend Areas
 
-`AnalysisTabs` 承载 6 个核心模块：
+### Analysis Workspace
 
-1. 章节还原
-2. 条款标签
-3. 关系配置
-4. 审计关注事项
-5. 校验与证据链
-6. Agent 过程日志
+- 合同原件查看
+- 章节树
+- 条款标签
+- 审计配置
+- 审计关注点
+- 校验与证据链
+- Agent 过程日志
 
-### 状态管理
+### Knowledge Base Workspace
 
-`Zustand` 统一管理：
+- 制度上传
+- 制度管理
+- 规则管理
+- 合同审查
+- 审查报告
 
-1. 当前任务结果
-2. 当前激活标签页
-3. 当前激活证据
-4. 当前页码
-5. 关系配置
-6. 审计关注事项与校验结果
+## Runtime Model Profiles
 
-## 扩展点
+### Public Profile
 
-1. MinerU 或版面分析模型，用于复杂 PDF 结构解析。
-2. 规则引擎，用于付款约束、必备条款、模板偏差等硬规则。
-3. 知识图谱与企业关系库，用于主体、股东、法人、实控人路径核验。
-4. RPA/API，用于合同、付款、发票、验收、审批系统联查。
+- Text model: `deepseek-v4-flash`
+- Vision model: `qwen-vl-plus`
+- OCR strategy: `vl_primary`
 
-## 风险表述约束
+### Internal Profile
 
-系统对高敏感事项统一采用以下表达：
+- Text model: `Qwen3.6-35B-A3B-GGUF`
+- Vision model: none
+- OCR strategy: `paddle_primary`
 
-1. 疑似风险
-2. 待核验事项
-3. 建议人工复核
-4. 需要外部数据确认
+## Evidence Strategy
 
-禁止使用“已确认违规”“确定存在关联交易”“审计结论”等绝对化措辞。
+证据定位采用两层思路：
+
+- 语义层
+  - 先通过模型识别章节、条款、关键字段
+- grounding 层
+  - 再把目标文本映射回 OCR blocks
+  - 条款优先使用模型辅助 block grounding
+  - 章节和摘要字段允许走本地快速定位兜底
+
+这样可以把“理解”和“坐标定位”解耦，便于后续替换 OCR / VL / grounding 方案。
+
+## Extension Points
+
+- `RuleEngineAdapter`
+  - 接入 GoRules / DMN / 自定义规则服务
+- `RelationConfigService`
+  - 注入用户配置的关系关注、规则校验、外部核验上下文
+- `Enterprise / Knowledge adapters`
+  - 企业关系库
+  - 知识图谱
+  - 内部主数据
+  - RPA / API 查询
+
+## Storage
+
+- 本地任务与结果：`LocalStore`
+- 制度 / 范本 / 规则 / 报告：Redis stores
+- 上传与缓存：`backend/uploads/`
+- 运行日志：`.run-logs/`

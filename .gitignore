@@ -10,6 +10,14 @@ backend/__pycache__/
 backend/.pytest_cache/
 backend/uploads/
 .run-logs/
+.runlogs/
+output/
+tmp/
+
+*.log
+*.err.log
+*.stdout.log
+*.stderr.log
 
 *.pyc
 *.pyo

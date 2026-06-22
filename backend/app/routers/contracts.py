@@ -1,20 +1,312 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
 from app.logging_utils import app_logger, json_dumps
-from app.schemas.contract import ContractAnalysisResult, UploadResponse
-from app.schemas.contract import TaskStatus
+from app.schemas.contract import (
+    ContractAnalysisResult,
+    KnowledgeBaseReviewState,
+    KnowledgeBaseReviewStep,
+    TaskStatus,
+    UploadResponse,
+)
+from app.schemas.review import ReviewRequest
 from app.storage.local_store import LocalStore
 
 
-def get_contract_router(store: LocalStore, agent):
+def get_contract_router(store: LocalStore, agent, review_pipeline=None, review_bridge=None):
     router = APIRouter(prefix="/api/contracts", tags=["contracts"])
+
+    def build_kb_review_state(
+        *,
+        status: str,
+        progress_percent: int,
+        current_step_id: str | None,
+        current_step_label: str | None,
+        message: str | None,
+        failed: bool = False,
+        detail: str | None = None,
+    ) -> KnowledgeBaseReviewState:
+        steps = [
+            KnowledgeBaseReviewStep(id="classify_contract", label="识别合同类型", status="pending"),
+            KnowledgeBaseReviewStep(id="match_template", label="匹配有效范本", status="pending"),
+            KnowledgeBaseReviewStep(id="extract_schema", label="抽取结构化字段", status="pending"),
+            KnowledgeBaseReviewStep(id="compare_template", label="比对范本条款", status="pending"),
+            KnowledgeBaseReviewStep(id="retrieve_policy", label="检索制度依据", status="pending"),
+            KnowledgeBaseReviewStep(id="run_rules", label="执行规则校验", status="pending"),
+            KnowledgeBaseReviewStep(id="generate_issues", label="生成审查问题", status="pending"),
+            KnowledgeBaseReviewStep(id="save_report", label="写入审查报告", status="pending"),
+        ]
+        order = [item.id for item in steps]
+        if current_step_id in order:
+            current_index = order.index(current_step_id)
+            for index, step in enumerate(steps):
+                if index < current_index:
+                    step.status = "completed"
+                elif index == current_index:
+                    step.status = "failed" if failed else ("completed" if status == "completed" else "running")
+                    step.detail = detail
+        elif status == "completed":
+            for step in steps:
+                step.status = "completed"
+        return KnowledgeBaseReviewState(
+            status=status,
+            progressPercent=progress_percent,
+            currentStepId=current_step_id,
+            currentStepLabel=current_step_label,
+            message=message,
+            steps=steps,
+        )
+
+    def start_knowledge_base_merge(
+        *,
+        task_id: str,
+        result: ContractAnalysisResult,
+        audit_focuses,
+        verification_items,
+        agent_steps,
+        final_task_status: TaskStatus,
+    ) -> None:
+        if review_pipeline is None or review_bridge is None:
+            return
+
+        store.update_task(
+            task_id,
+            status=final_task_status,
+            progress_percent=90,
+            current_stage="knowledge_base_review",
+            stage_detail="制度底座校验中，可先查看主结果。",
+            knowledge_base_review=build_kb_review_state(
+                status="running",
+                progress_percent=0,
+                current_step_id="classify_contract",
+                current_step_label="识别合同类型",
+                message="制度底座已启动，正在识别合同类型。",
+            ),
+        )
+
+        async def run_knowledge_base_merge() -> None:
+            try:
+                review_result = await review_pipeline.review_contract(
+                    ReviewRequest(source_task_id=task_id),
+                    progress_callback=lambda state: store.update_task(
+                        task_id,
+                        status=final_task_status,
+                        progress_percent=min(99, 90 + round((state.progressPercent or 0) * 0.09)),
+                        current_stage="knowledge_base_review",
+                        stage_detail=state.message,
+                        knowledge_base_review=state,
+                    ),
+                )
+                kb_report = review_result["report"]
+                result.task.status = final_task_status
+                result.task.knowledgeBaseReview = store.get_task(task_id).task.knowledgeBaseReview
+                merged_focuses = review_bridge.merge_focuses(
+                    audit_focuses,
+                    review_bridge.build_focuses(kb_report),
+                )
+                merged_verification = review_bridge.merge_verification_items(
+                    verification_items,
+                    review_bridge.build_verification_items(kb_report),
+                )
+                merged_steps = list(agent_steps)
+                merged_steps.append(review_bridge.build_agent_step(kb_report))
+                store.save_result(
+                    task_id=task_id,
+                    result=result,
+                    audit_focuses=merged_focuses,
+                    verification_items=merged_verification,
+                    agent_steps=merged_steps,
+                )
+                app_logger.info(
+                    json_dumps(
+                        {
+                            "event": "knowledge_base_review_merged",
+                            "taskId": task_id,
+                            "kbIssues": len(kb_report.issues),
+                            "mergedAuditFocuses": len(merged_focuses),
+                            "mergedVerificationItems": len(merged_verification),
+                        }
+                    )
+                )
+            except Exception as exc:
+                result.task.status = final_task_status
+                store.update_task(
+                    task_id,
+                    status=final_task_status,
+                    progress_percent=98,
+                    current_stage="knowledge_base_review",
+                    stage_detail=f"制度底座校验失败：{exc}",
+                    knowledge_base_review=build_kb_review_state(
+                        status="failed",
+                        progress_percent=100,
+                        current_step_id="save_report",
+                        current_step_label="制度校验失败",
+                        message=f"制度底座校验失败：{exc}",
+                        failed=True,
+                        detail=str(exc),
+                    ),
+                )
+                result.task.knowledgeBaseReview = store.get_task(task_id).task.knowledgeBaseReview
+                app_logger.warning(
+                    json_dumps(
+                        {
+                            "event": "knowledge_base_review_merge_failed",
+                            "taskId": task_id,
+                            "error": str(exc),
+                        }
+                    )
+                )
+                store.save_result(
+                    task_id=task_id,
+                    result=result,
+                    audit_focuses=audit_focuses,
+                    verification_items=verification_items,
+                    agent_steps=agent_steps,
+                )
+
+        threading.Thread(target=lambda: asyncio.run(run_knowledge_base_merge()), daemon=True).start()
+
+    def start_result_reanalysis(task_id: str, updated_result: ContractAnalysisResult) -> None:
+        record = store.get_task(task_id)
+        store.replace_result(task_id, updated_result)
+        store.update_task(
+            task_id,
+            status=TaskStatus.PROCESSING,
+            progress_percent=84,
+            current_stage="draft_reanalysis",
+            stage_detail="已应用结构化字段修改，正在重新生成审查结果。",
+            knowledge_base_review=KnowledgeBaseReviewState(status="idle", progressPercent=0, steps=[]),
+        )
+
+        async def run_refresh() -> None:
+            try:
+                result = updated_result.model_copy(deep=True)
+                task = record.task.model_copy(deep=True)
+                task.status = TaskStatus.PROCESSING
+                result.task = task
+                relations = store.list_relations()
+                store.update_task(
+                    task_id,
+                    progress_percent=88,
+                    current_stage="draft_reanalysis",
+                    stage_detail="正在根据已编辑字段重新执行规则与审查关注点。",
+                )
+                await agent.evidence_service.attach_evidences(result.pages, result.sections, result.clauses, result.keyFacts)
+                rule_task = agent.rule_engine_adapter.evaluate(
+                    task_id=task_id,
+                    sections=result.sections,
+                    clauses=result.clauses,
+                    key_facts=result.keyFacts,
+                    configs=relations,
+                )
+                audit_task = agent.audit_focus_agent.generate(
+                    sections=result.sections,
+                    clauses=result.clauses,
+                    relations=relations,
+                    key_facts=result.keyFacts,
+                )
+                rule_results, model_audit_focuses = await asyncio.gather(rule_task, audit_task)
+                rule_audit_focuses = agent.audit_focus_agent.build_rule_engine_focuses(
+                    clauses=result.clauses,
+                    relations=relations,
+                    rule_results=rule_results,
+                )
+                audit_focuses = agent.audit_focus_agent._dedupe_audit_focuses(rule_audit_focuses + model_audit_focuses)
+                agent._bind_clause_audit_links(result.clauses, audit_focuses)
+                verification_items = await agent.verification_agent.verify(
+                    sections=result.sections,
+                    clauses=result.clauses,
+                    audit_focuses=audit_focuses,
+                    rule_results=rule_results,
+                )
+                result.task.confidenceOverview = agent.confidence_service.summarize(
+                    sections=result.sections,
+                    clauses=result.clauses,
+                    audit_focuses=audit_focuses,
+                )
+                result.task.status = TaskStatus.NEEDS_REVIEW if any(item.needHumanReview for item in result.clauses) else TaskStatus.COMPLETED
+                refresh_steps = [
+                    agent._step(
+                        "step_edit_001",
+                        "应用结构化字段修改",
+                        "success",
+                        120,
+                        f"{len(result.clauses)} clauses / {len(result.keyFacts)} key facts",
+                        "已将页面编辑同步到任务草稿",
+                        "result_editor",
+                    ),
+                    agent._step(
+                        "step_edit_002",
+                        "重新生成审查关注点",
+                        "success",
+                        420,
+                        f"{len(result.clauses)} clauses",
+                        f"生成 {len(audit_focuses)} 项审查关注点",
+                        "audit_focus_agent",
+                    ),
+                    agent._step(
+                        "step_edit_003",
+                        "重新生成校验证据",
+                        "success",
+                        180,
+                        f"{len(audit_focuses)} audit items",
+                        f"形成 {len(verification_items)} 条校验记录",
+                        "verification_agent",
+                    ),
+                ]
+                store.save_result(
+                    task_id=task_id,
+                    result=result,
+                    audit_focuses=audit_focuses,
+                    verification_items=verification_items,
+                    agent_steps=refresh_steps,
+                )
+                start_knowledge_base_merge(
+                    task_id=task_id,
+                    result=result,
+                    audit_focuses=audit_focuses,
+                    verification_items=verification_items,
+                    agent_steps=refresh_steps,
+                    final_task_status=result.task.status,
+                )
+                app_logger.info(
+                    json_dumps(
+                        {
+                            "event": "result_reanalysis_completed",
+                            "taskId": task_id,
+                            "clauses": len(result.clauses),
+                            "keyFacts": len(result.keyFacts),
+                            "auditFocuses": len(audit_focuses),
+                            "verificationItems": len(verification_items),
+                        }
+                    )
+                )
+            except Exception as exc:
+                store.update_task(
+                    task_id,
+                    status=TaskStatus.NEEDS_REVIEW,
+                    progress_percent=96,
+                    current_stage="draft_reanalysis_failed",
+                    stage_detail=f"编辑后重审失败：{exc}",
+                )
+                app_logger.exception(
+                    json_dumps(
+                        {
+                            "event": "result_reanalysis_failed",
+                            "taskId": task_id,
+                            "error": str(exc),
+                        }
+                    )
+                )
+
+        threading.Thread(target=lambda: asyncio.run(run_refresh()), daemon=True).start()
 
     @router.post("/upload", response_model=UploadResponse)
     async def upload_contract(
@@ -142,12 +434,21 @@ def get_contract_router(store: LocalStore, agent):
                         }
                     )
                 )
+                final_task_status = artifacts.result.task.status
                 store.save_result(
                     task_id=task_id,
                     result=artifacts.result,
                     audit_focuses=artifacts.audit_focuses,
                     verification_items=artifacts.verification_items,
                     agent_steps=artifacts.agent_steps,
+                )
+                start_knowledge_base_merge(
+                    task_id=task_id,
+                    result=artifacts.result,
+                    audit_focuses=artifacts.audit_focuses,
+                    verification_items=artifacts.verification_items,
+                    agent_steps=artifacts.agent_steps,
+                    final_task_status=final_task_status,
                 )
             except Exception as exc:
                 store.update_task(
@@ -169,7 +470,8 @@ def get_contract_router(store: LocalStore, agent):
             finally:
                 record.analysis_job = None
 
-        record.analysis_job = asyncio.create_task(run_analysis())
+        loop = asyncio.get_running_loop()
+        record.analysis_job = loop.run_in_executor(None, lambda: asyncio.run(run_analysis()))
         return {
             "task_id": task_id,
             "status": store.get_task(task_id).task.status,
@@ -187,6 +489,31 @@ def get_contract_router(store: LocalStore, agent):
         if not record.result:
             raise HTTPException(status_code=404, detail="Result not generated")
         return record.result
+
+    @router.post("/{task_id}/reanalyze-from-result")
+    async def reanalyze_from_result(task_id: str, payload: ContractAnalysisResult = Body(...)):
+        try:
+            store.get_task(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Task not found") from exc
+        if payload.task.taskId != task_id:
+            raise HTTPException(status_code=400, detail="Task id mismatch")
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "result_reanalysis_requested",
+                    "taskId": task_id,
+                    "clauses": len(payload.clauses),
+                    "keyFacts": len(payload.keyFacts),
+                }
+            )
+        )
+        start_result_reanalysis(task_id, payload.model_copy(deep=True))
+        return {
+            "task_id": task_id,
+            "status": store.get_task(task_id).task.status,
+            "message": "已接收编辑草稿，正在重新审查并同步制度底座。",
+        }
 
     @router.get("/{task_id}/pages/{page}")
     async def get_contract_page(task_id: str, page: int):

@@ -49,7 +49,7 @@ export function RelationConfigEditor({
   const [rulePayloadText, setRulePayloadText] = useState(prettyRulePayload(initialValue?.rulePayload));
   const [jsonError, setJsonError] = useState<string | null>(null);
 
-  const title = useMemo(() => (initialValue ? "编辑审计配置" : "新增审计配置"), [initialValue]);
+  const title = useMemo(() => (initialValue ? "编辑审查配置" : "新增审查配置"), [initialValue]);
 
   return (
     <div className="rounded-[24px] border border-white/8 bg-slate-950/30 p-4">

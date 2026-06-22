@@ -1,226 +1,130 @@
 import { useEffect, useMemo, useState } from "react";
-import { AnalysisTabs } from "./components/analysis/AnalysisTabs";
-import { ContractViewer } from "./components/contract/ContractViewer";
-import { RelationConfigPanel } from "./components/config/RelationConfigPanel";
-import { AppShell } from "./components/layout/AppShell";
-import { HeaderBar } from "./components/layout/HeaderBar";
-import { EmptyState } from "./components/shared/EmptyState";
-import { ErrorBanner } from "./components/shared/ErrorBanner";
-import { LoadingState } from "./components/shared/LoadingState";
-import { useContractStore } from "./store/contractStore";
-import type { KeyFact } from "./types/contract";
+import { AnalysisWorkspace } from "./components/workspace/AnalysisWorkspace";
+import { BaseWorkspace } from "./pages/BaseWorkspace";
+import { api } from "./services/api";
+import type { RuntimeModelProfileState } from "./types/base";
 
-function deriveContractNumber(keyFacts: KeyFact[]): string | null {
-  const fact = keyFacts.find((item) => item.label === "合同编号" || item.label === "协议编号");
-  const value = fact?.value.trim();
-  if (!value || value === "未提取" || value === "待提取") {
-    return null;
-  }
-  return value;
-}
+type WorkspaceMode = "analysis" | "base";
 
-function AuditConfigModal({
-  open,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[88vh] w-full max-w-[1080px] flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#0f1b2d] shadow-[0_30px_120px_rgba(2,8,23,0.55)]">
-        <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/60">Audit Config Workspace</div>
-            <h2 className="mt-1 text-xl font-semibold text-white">审计配置</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              在上传合同之前独立维护关系关注、规则校验与外部核验策略。
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 hover:border-cyan-400/24 hover:bg-white/[0.06]"
-          >
-            关闭
-          </button>
-        </div>
-        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
-}
+const WORKSPACE_KEY = "codex.workspace.mode";
 
 function App() {
-  const [auditConfigOpen, setAuditConfigOpen] = useState(false);
-  const {
-    task,
-    result,
-    relations,
-    auditFocuses,
-    verificationItems,
-    agentSteps,
-    activeTab,
-    activePage,
-    activeEntity,
-    selectedEvidenceId,
-    isBusy,
-    error,
-    boot,
-    loadSample,
-    uploadAndAnalyze,
-    reanalyze,
-    exportResult,
-    setActiveTab,
-    focusEvidence,
-    focusFromEvidence,
-    saveRelation,
-    removeRelation,
-    regenerateAudit,
-  } = useContractStore();
+  const [workspace, setWorkspace] = useState<WorkspaceMode>("analysis");
+  const [profileState, setProfileState] = useState<RuntimeModelProfileState | null>(null);
+  const [switchingProfile, setSwitchingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    void boot();
-  }, [boot]);
-
-  useEffect(() => {
-    if (!activeEntity) return;
-    const element = document.getElementById(`card-${activeEntity.id}`);
-    if (element) {
-      window.setTimeout(() => {
-        element.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }, 80);
+    const stored = window.localStorage.getItem(WORKSPACE_KEY);
+    if (stored === "analysis" || stored === "base") {
+      setWorkspace(stored);
     }
-  }, [activeEntity, activeTab]);
-
-  const contractNumber = useMemo(() => deriveContractNumber(result?.keyFacts ?? []), [result?.keyFacts]);
-
-  const leftPanel = !result ? (
-    isBusy ? (
-      <LoadingState
-        label={task?.currentStage === "ocr_running" ? "正在识别扫描页面文本..." : "正在启动分析任务..."}
-        detail={task?.stageDetail ?? "正在准备文档并调度解析链路。"}
-        progress={task?.progressPercent ?? 0}
-      />
-    ) : (
-      <EmptyState
-        title="上传合同开始分析"
-        description="支持 PDF 与图片合同。系统会完成结构还原、条款识别、证据定位与审计关注生成。"
-        actionLabel="上传合同"
-        onAction={() => {
-          const input = document.getElementById("contract-upload-input") as HTMLInputElement | null;
-          input?.click();
-        }}
-      />
-    )
-  ) : (
-    <ContractViewer
-      pages={result.pages}
-      activePage={activePage}
-      selectedEvidenceId={selectedEvidenceId}
-      onSelectPage={(page) => useContractStore.setState({ activePage: page })}
-      onEvidenceClick={(evidence) => focusFromEvidence(evidence)}
-    />
-  );
-
-  const rightPanel = (
-    <AnalysisTabs
-      activeTab={activeTab}
-      activeEntity={activeEntity}
-      sections={result?.sections ?? []}
-      clauses={result?.clauses ?? []}
-      keyFacts={result?.keyFacts ?? []}
-      contractNumber={contractNumber}
-      auditFocuses={auditFocuses}
-      verificationItems={verificationItems}
-      agentSteps={agentSteps}
-      hasResult={Boolean(result)}
-      isBusy={isBusy}
-      onTabChange={setActiveTab}
-      onSectionSelect={(section) =>
-        section.evidenceId ? focusEvidence(section.evidenceId, "sections", { kind: "section", id: section.id }) : undefined
+    void (async () => {
+      try {
+        const payload = await api.getRuntimeModelProfiles();
+        setProfileState(payload);
+      } catch (error) {
+        setProfileError(error instanceof Error ? error.message : "模型档位加载失败");
       }
-      onClauseSelect={(clause) => focusEvidence(clause.evidenceId, "clauses", { kind: "clause", id: clause.id })}
-      onAuditSelect={(focus) => {
-        const relatedClause = result?.clauses.find((item) => item.id === focus.evidenceClauseIds[0]);
-        if (relatedClause) {
-          focusEvidence(relatedClause.evidenceId, "audit", { kind: "audit", id: focus.id });
-        }
-      }}
-    />
+    })();
+  }, []);
+
+  const activeProfile = useMemo(
+    () => profileState?.profiles.find((profile) => profile.id === profileState.currentProfileId) ?? null,
+    [profileState],
   );
 
-  const completedSteps = agentSteps?.length ?? 0;
-  const externalPendingCount = verificationItems?.filter((item) => item.needExternalTool).length ?? 0;
-  const currentTask = task ?? result?.task ?? null;
+  function switchWorkspace(next: WorkspaceMode) {
+    setWorkspace(next);
+    window.localStorage.setItem(WORKSPACE_KEY, next);
+  }
 
-  const footer = result ? (
-    <footer className="glass-panel rounded-[24px] border border-white/8 px-5 py-4">
-      <div className="grid gap-3 md:grid-cols-4">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">任务编号</div>
-          <div className="mt-2 text-sm text-white">{result.task.taskId}</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Agent 状态</div>
-          <div className="mt-2 text-sm text-white">
-            已完成 {completedSteps} 个步骤，仍有 {externalPendingCount} 项待外部核验
-          </div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">模型服务</div>
-          <div className="mt-2 text-sm text-white">{result.task.modelName}</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">证据链</div>
-          <div className="mt-2 text-sm text-white">结果与原文位置保持联动映射</div>
-        </div>
-      </div>
-    </footer>
-  ) : (
-    <footer className="rounded-[24px] border border-dashed border-white/8 px-5 py-4 text-sm text-slate-400">
-      {isBusy
-        ? `处理中：${currentTask?.progressPercent ?? 0}% · ${currentTask?.stageDetail ?? "等待服务返回进度"}`
-        : "工作台已就绪，可先配置审计策略再上传合同。"}
-    </footer>
-  );
+  async function switchModelProfile(profileId: string) {
+    try {
+      setSwitchingProfile(true);
+      setProfileError(null);
+      const payload = await api.switchRuntimeModelProfile(profileId);
+      setProfileState(payload);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "模型切换失败");
+    } finally {
+      setSwitchingProfile(false);
+    }
+  }
 
   return (
-    <>
-      <AppShell
-        header={
-          <div className="space-y-3">
-            <HeaderBar
-              task={currentTask}
-              busy={isBusy}
-              contractNumber={contractNumber}
-              onOpenAuditConfig={() => setAuditConfigOpen(true)}
-              onLoadSample={() => void loadSample()}
-              onUpload={(file) => void uploadAndAnalyze(file)}
-              onReanalyze={() => void reanalyze()}
-              onExport={exportResult}
-            />
-            {error ? <ErrorBanner message={error} /> : null}
+    <div className="min-h-screen">
+      <div className="fixed left-4 top-4 z-50 flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 rounded-[22px] border border-white/10 bg-slate-950/78 px-3 py-3 shadow-[0_22px_70px_rgba(2,8,23,0.55)] backdrop-blur-xl">
+        <div className="mr-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => switchWorkspace("analysis")}
+            className={`rounded-full px-4 py-2 text-sm transition ${
+              workspace === "analysis"
+                ? "border border-cyan-400/40 bg-cyan-400/12 text-cyan-50"
+                : "border border-white/10 bg-slate-950/60 text-slate-200"
+            }`}
+          >
+            合同解析工作台
+          </button>
+          <button
+            type="button"
+            onClick={() => switchWorkspace("base")}
+            className={`rounded-full px-4 py-2 text-sm transition ${
+              workspace === "base"
+                ? "border border-cyan-400/40 bg-cyan-400/12 text-cyan-50"
+                : "border border-white/10 bg-slate-950/60 text-slate-200"
+            }`}
+          >
+            智能审查底座
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2">
+          <span className="text-[11px] uppercase tracking-[0.22em] text-cyan-200/60">模型档位</span>
+          <select
+            value={profileState?.currentProfileId ?? "public"}
+            onChange={(event) => void switchModelProfile(event.target.value)}
+            disabled={switchingProfile || !profileState}
+            className="rounded-full border border-white/10 bg-slate-950 px-3 py-1 text-sm text-slate-100 outline-none"
+          >
+            {(profileState?.profiles ?? []).map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {activeProfile ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+              当前档位 {profileState?.currentProfileLabel}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+              文本 {activeProfile.textModel}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+              多模态 {activeProfile.visionModel || "未启用"}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+              OCR {profileState?.paddleProbe?.status || activeProfile.ocrStrategy}
+            </span>
           </div>
-        }
-        left={leftPanel}
-        right={rightPanel}
-        footer={footer}
-      />
-      <AuditConfigModal open={auditConfigOpen} onClose={() => setAuditConfigOpen(false)}>
-        <RelationConfigPanel
-          relations={relations}
-          activeId={activeEntity?.kind === "relation" ? activeEntity.id : null}
-          onSave={(relation) => void saveRelation(relation)}
-          onDelete={(relationId) => void removeRelation(relationId)}
-          onRegenerateAudit={() => void regenerateAudit()}
-          allowRegenerate={Boolean(result)}
-        />
-      </AuditConfigModal>
-    </>
+        ) : null}
+
+        {switchingProfile ? <div className="text-xs text-cyan-100">正在切换模型链路...</div> : null}
+        {profileError ? <div className="text-xs text-rose-200">{profileError}</div> : null}
+      </div>
+
+      {workspace === "analysis" ? (
+        <AnalysisWorkspace refreshToken={refreshToken} />
+      ) : (
+        <BaseWorkspace refreshToken={refreshToken} />
+      )}
+    </div>
   );
 }
 

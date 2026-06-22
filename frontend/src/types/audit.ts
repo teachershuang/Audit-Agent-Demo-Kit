@@ -4,6 +4,7 @@ export type AuditFocusSource =
   | "user_rule_check"
   | "user_relation_check"
   | "user_external_check"
+  | "knowledge_base_rule_check"
   | "agent_discovered";
 
 export interface AuditFocus {

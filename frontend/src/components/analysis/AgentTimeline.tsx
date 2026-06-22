@@ -12,21 +12,23 @@ const toolMap: Record<string, string> = {
   upload_handler: "上传任务处理",
   document_service: "文档类型识别",
   "document_service + ocr_service": "文档解析与 OCR",
-  qwen_service: "Qwen 模型解析",
+  qwen_service: "大模型解析引擎",
   evidence_service: "证据定位引擎",
-  audit_focus_agent: "关注事项生成器",
+  audit_focus_agent: "审查关注点生成",
   verification_agent: "校验引擎",
-  gorules_adapter: "GoRules 规则引擎适配器",
+  gorules_adapter: "规则引擎适配层",
+  knowledge_base_review_pipeline: "制度底座审查流水线",
 };
 
 function summarizeStep(step: AgentStep) {
-  if (step.name.includes("章节")) return "系统正在把合同重新整理成可阅读的章节结构，并保持原始顺序。";
-  if (step.name.includes("条款")) return "系统正在识别付款、验收、违约等关键条款，并输出结构化字段。";
-  if (step.name.includes("关键信息")) return "系统正在抽取主体、编号、金额、期限等可直接引用的关键信息。";
-  if (step.name.includes("证据")) return "系统正在把模型结果回链到原文位置，建立可点击的证据高亮。";
-  if (step.name.includes("审计关注")) return "系统正在基于合同内容与审计配置生成需要重点关注的风险方向。";
-  if (step.name.includes("校验")) return "系统正在交叉检查规则结果、模型理解和证据链是否一致。";
-  if (step.name.includes("文档")) return "系统正在判断文件类型并准备合适的解析链路。";
+  if (step.name.includes("章节")) return "系统正在重建合同章节结构，并保留原始顺序。";
+  if (step.name.includes("条款")) return "系统正在识别付款、验收、违约等关键条款，并生成结构化结果。";
+  if (step.name.includes("关键信息")) return "系统正在提取主体、编号、金额、期限等核心字段。";
+  if (step.name.includes("证据")) return "系统正在把识别结果回链到原文位置，形成可点击证据。";
+  if (step.name.includes("审查关注")) return "系统正在生成需要重点复核的风险方向。";
+  if (step.name.includes("制度底座")) return "系统正在执行合同类型识别、范本匹配、制度检索和规则校验。";
+  if (step.name.includes("校验")) return "系统正在交叉核验规则命中、模型理解和证据链。";
+  if (step.name.includes("文档")) return "系统正在判断文档类型并准备解析链路。";
   return step.outputSummary;
 }
 
@@ -40,9 +42,7 @@ export function AgentTimeline({ steps }: { steps: AgentStep[] }) {
           </div>
           <div>
             <h3 className="text-base font-semibold text-white">系统处理过程</h3>
-            <p className="mt-1 text-sm text-slate-300">
-              这里展示的不是底层技术细节，而是系统在当前合同上完成了哪些关键动作。
-            </p>
+            <p className="mt-1 text-sm text-slate-300">这里展示每一步做了什么，而不是底层实现细节。</p>
           </div>
         </div>
       </section>
@@ -71,14 +71,14 @@ export function AgentTimeline({ steps }: { steps: AgentStep[] }) {
             <div>
               <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
                 <Cpu className="h-3.5 w-3.5" />
-                系统收到的信息
+                输入
               </div>
               <div className="mt-2 leading-7">{step.inputSummary}</div>
             </div>
             <div>
               <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
                 <ShieldCheck className="h-3.5 w-3.5" />
-                当前使用能力
+                使用能力
               </div>
               <div className="mt-2 leading-7">{toolMap[step.tool] ?? step.tool}</div>
             </div>

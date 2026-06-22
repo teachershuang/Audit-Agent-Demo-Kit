@@ -1,0 +1,1 @@
+Contract audit and policy review agent demo with evidence grounding, audit focus generation, runtime model switching, and GoRules-ready rule engine integration.

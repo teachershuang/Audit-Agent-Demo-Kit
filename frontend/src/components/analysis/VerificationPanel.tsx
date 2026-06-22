@@ -19,23 +19,26 @@ function buildUserSummary(item: VerificationItem) {
   if (item.source === "rule_engine") {
     switch (item.engineStatus) {
       case "hit":
-        return "规则引擎命中了当前配置的审计口径，建议重点复核该项证据与条款。";
+        return "规则引擎命中了当前配置的审查口径，建议重点复核该项证据与条款。";
       case "missing_configured_rules":
         return "本地配置已存在，但规则引擎里没有对应规则，这条配置本轮没有真正执行。";
       case "unmatched_returned_rules":
-        return "规则引擎返回了结果，但这些结果没有正确映射到当前页面配置，需要继续对齐。";
+        return "规则引擎返回了结果，但没有正确映射到当前页面配置，仍需对齐。";
       case "not_connected":
-        return "规则引擎未接入，本轮只能展示模型抽取和基础校验结果。";
+        return "规则引擎未接入，本轮只能展示模型提取和基础校验结果。";
       case "engine_error":
         return "规则引擎调用失败，这一轮校验结果不完整。";
       default:
         return item.description;
     }
   }
+  if (item.source === "knowledge_base") {
+    return "这项结果来自制度底座的范本比对与规则库校验，建议结合来源条款和模板定位复核。";
+  }
 
   switch (item.status) {
     case "pass":
-      return "系统已经找到足够支撑当前判断的证据，这一项可以继续向下查看。";
+      return "系统已经找到足够支撑当前判断的证据，这一项可继续向下查看。";
     case "warning":
       return "系统识别到了线索，但完整性或一致性还不够稳定，建议人工复核。";
     case "fail":
@@ -55,6 +58,8 @@ function sourceLabel(item: VerificationItem) {
   switch (item.source) {
     case "rule_engine":
       return "规则引擎";
+    case "knowledge_base":
+      return "制度底座";
     case "external_dependency":
       return "外部依赖";
     default:
@@ -129,7 +134,7 @@ export function VerificationPanel({
 
               <div className="mt-4 grid gap-3 rounded-2xl border border-white/8 bg-slate-950/25 p-4 text-sm text-slate-300 md:grid-cols-2">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">系统怎么判断</div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">系统如何判断</div>
                   <div className="mt-2 leading-7">{humanizeMethod(item.method)}</div>
                 </div>
                 <div>

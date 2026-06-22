@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,17 @@ import httpx
 from jsonschema import ValidationError, validate
 
 from app.config import Settings
+from app.logging_utils import app_logger, json_dumps
 
 
 class QwenService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.cache_dir = Path(__file__).resolve().parents[2] / settings.storage_dir / "_cache" / settings.qwen_cache_namespace
+        self.cache_dir = Path()
+        self.refresh_runtime()
+
+    def refresh_runtime(self) -> None:
+        self.cache_dir = Path(__file__).resolve().parents[2] / self.settings.storage_dir / "_cache" / self.settings.qwen_cache_namespace
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -97,12 +103,22 @@ class QwenService:
     async def _post_chat(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
         cache_path = self._cache_path(payload)
         if self.settings.qwen_cache_enabled and cache_path.exists():
+            app_logger.info(
+                json_dumps(
+                    {
+                        "event": "qwen_cache_hit",
+                        "model": payload.get("model"),
+                        "cachePath": str(cache_path),
+                    }
+                )
+            )
             return json.loads(cache_path.read_text(encoding="utf-8"))
 
         headers = {
             "Authorization": f"Bearer {self.settings.qwen_api_key}",
             "Content-Type": "application/json",
         }
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.post(
@@ -117,6 +133,17 @@ class QwenService:
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Qwen request failed: {exc}") from exc
         data = response.json()
+        app_logger.info(
+            json_dumps(
+                {
+                    "event": "qwen_request_completed",
+                    "model": payload.get("model"),
+                    "timeoutSeconds": timeout,
+                    "durationMs": round((time.perf_counter() - started) * 1000),
+                    "messageCount": len(payload.get("messages") or []),
+                }
+            )
+        )
         if self.settings.qwen_cache_enabled:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)

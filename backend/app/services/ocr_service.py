@@ -55,8 +55,12 @@ class OCRService:
         self.settings = settings
         self.qwen_service = qwen_service
         self.paddle_ocr_service = paddle_ocr_service
-        self.max_vl_concurrency = max(1, settings.scanned_vl_concurrency)
-        self.scanned_ocr_strategy = (settings.scanned_ocr_strategy or "vl_primary").strip().lower()
+
+    def _current_max_vl_concurrency(self) -> int:
+        return max(1, self.settings.scanned_vl_concurrency)
+
+    def _current_scanned_ocr_strategy(self) -> str:
+        return (self.settings.scanned_ocr_strategy or "vl_primary").strip().lower()
 
     async def extract_document(
         self,
@@ -238,7 +242,7 @@ class OCRService:
 
         paddle_results: dict[int, list[PaddleOCRLine]] = {}
         should_prefetch_paddle = (
-            self.scanned_ocr_strategy == "paddle_primary"
+            self._current_scanned_ocr_strategy() == "paddle_primary"
             and self.settings.enable_paddle_ocr
             and self.paddle_ocr_service.is_available
         )
@@ -258,7 +262,7 @@ class OCRService:
             if paddle_results:
                 pipelines.add("paddle_ocr")
 
-        semaphore = asyncio.Semaphore(self.max_vl_concurrency)
+        semaphore = asyncio.Semaphore(self._current_max_vl_concurrency())
         progress_lock = asyncio.Lock()
         completed_pages = 0
         total_pages = len(ocr_candidates)
@@ -306,7 +310,7 @@ class OCRService:
             pipelines.add("qwen_vl_semantic")
         lines = paddle_lines or []
 
-        if self.scanned_ocr_strategy == "vl_primary" and vl_paragraphs:
+        if self._current_scanned_ocr_strategy() == "vl_primary" and vl_paragraphs:
             if not lines and self.settings.enable_paddle_ocr and self.paddle_ocr_service.is_available:
                 extracted = await self.paddle_ocr_service.extract_pages(
                     [{"page": candidate.page_number, "image_path": str(candidate.image_path)}]

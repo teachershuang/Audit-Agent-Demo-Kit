@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+
+BUSINESS_RULES = [
+    {
+        "id": "RULE_001",
+        "name": "未匹配到有效集团范本",
+        "severity": "must_modify",
+        "department": "business",
+        "keywords": ["合同范本", "标准模板", "审核"],
+        "logic": {"type": "template_required"},
+        "suggestion_template": "请选择并套用集团当前有效合同范本。",
+    },
+    {
+        "id": "RULE_002",
+        "name": "待审合同类型与所选范本类型不一致",
+        "severity": "must_modify",
+        "department": "business",
+        "keywords": ["适用范围", "合同类型"],
+        "logic": {"type": "template_category_match"},
+        "suggestion_template": "请改用与合同类型一致的集团范本。",
+    },
+    {
+        "id": "RULE_006",
+        "name": "缺少合同标的",
+        "severity": "must_modify",
+        "department": "business",
+        "keywords": ["标的", "内容"],
+        "logic": {"type": "schema_required", "field": "contract_subject"},
+        "suggestion_template": "请补充明确的合同标的或服务/采购内容。",
+    },
+    {
+        "id": "RULE_007",
+        "name": "合同标的不清晰",
+        "severity": "suggest_modify",
+        "department": "business",
+        "keywords": ["明确", "内容"],
+        "logic": {"type": "field_length_min", "field": "contract_subject", "min_length": 12},
+        "suggestion_template": "请细化合同标的的内容、范围和交付对象。",
+    },
+    {
+        "id": "RULE_008",
+        "name": "缺少数量/质量/规格",
+        "severity": "suggest_modify",
+        "department": "business",
+        "keywords": ["数量", "质量", "规格"],
+        "logic": {"type": "required_any", "fields": ["quantity", "quality"]},
+        "suggestion_template": "请补充数量、质量或规格标准。",
+    },
+    {
+        "id": "RULE_009",
+        "name": "缺少履行期限",
+        "severity": "must_modify",
+        "department": "business",
+        "keywords": ["期限", "工期"],
+        "logic": {"type": "schema_required", "field": "delivery_term"},
+        "suggestion_template": "请补充明确的履行或交付期限。",
+    },
+    {
+        "id": "RULE_010",
+        "name": "缺少验收标准",
+        "severity": "must_modify",
+        "department": "business",
+        "keywords": ["验收", "质量标准"],
+        "logic": {"type": "schema_required", "field": "acceptance_standard"},
+        "suggestion_template": "请补充验收标准、流程及验收依据。",
+    },
+]

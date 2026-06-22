@@ -19,7 +19,11 @@ class EvidenceService:
         settings: Settings | None = None,
     ) -> None:
         self.qwen_service = qwen_service
-        self.parallelism = max(1, getattr(settings, "qwen_parallel_requests", 4))
+        self.settings = settings
+
+    @property
+    def parallelism(self) -> int:
+        return max(1, getattr(self.settings, "qwen_parallel_requests", 4))
 
     async def attach_evidences(
         self,
@@ -31,9 +35,9 @@ class EvidenceService:
         for page in pages:
             page.evidences = []
 
-        section_blocks = await self._ground_sections(pages, sections)
+        section_blocks = {}
         clause_blocks = await self._ground_clauses(pages, clauses)
-        fact_blocks = await self._ground_key_facts(pages, key_facts)
+        fact_blocks = {}
 
         for section in sections:
             if section.id in section_blocks:
@@ -146,8 +150,10 @@ class EvidenceService:
         if not self.qwen_service or not candidates:
             return {}
 
-        batches = self._chunk_items(candidates, 4)
-        tasks = [self._ground_batch(pages, batch, top_key=top_key, item_kind=item_kind) for batch in batches]
+        batch_size = 6 if item_kind == "clause" else 8
+        radius = 0 if item_kind in {"clause", "fact"} else 1
+        batches = self._chunk_items(candidates, batch_size)
+        tasks = [self._ground_batch(pages, batch, top_key=top_key, item_kind=item_kind, radius=radius) for batch in batches]
         results = await self._gather_limited(tasks, min(self.parallelism, max(1, len(tasks))))
         merged: dict[str, list[str]] = {}
         for batch_map in results:
@@ -162,8 +168,9 @@ class EvidenceService:
         batch: list[dict[str, Any]],
         top_key: str,
         item_kind: str,
+        radius: int,
     ) -> dict[str, list[str]]:
-        page_scope = self._candidate_page_scope(batch, pages, radius=1)
+        page_scope = self._candidate_page_scope(batch, pages, radius=radius)
         if not page_scope:
             page_scope = pages[: min(3, len(pages))]
         try:

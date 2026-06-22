@@ -101,6 +101,26 @@ class ConfidenceOverview(BaseModel):
     warnings: int
 
 
+class KnowledgeBaseReviewStep(BaseModel):
+    id: str
+    label: str
+    status: str = "pending"
+    detail: str | None = None
+
+
+class KnowledgeBaseReviewState(BaseModel):
+    status: str = "idle"
+    progressPercent: int = 0
+    currentStepId: str | None = None
+    currentStepLabel: str | None = None
+    message: str | None = None
+    detectedCategory: str | None = None
+    matchedTemplateId: str | None = None
+    matchedTemplateName: str | None = None
+    issueCount: int | None = None
+    steps: list[KnowledgeBaseReviewStep] = Field(default_factory=list)
+
+
 class ContractTask(BaseModel):
     taskId: str
     fileName: str
@@ -112,6 +132,7 @@ class ContractTask(BaseModel):
     currentStage: str | None = None
     stageDetail: str | None = None
     elapsedMs: int = 0
+    knowledgeBaseReview: KnowledgeBaseReviewState | None = None
 
 
 class ContractAnalysisResult(BaseModel):

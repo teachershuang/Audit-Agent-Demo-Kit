@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -20,15 +21,17 @@ def get_logs_router():
 
     @router.post("/frontend")
     async def write_frontend_log(payload: FrontendLogPayload):
-        frontend_logger.info(
+        level_name = str(payload.level or "info").upper()
+        frontend_logger.log(
+            getattr(logging, level_name, logging.INFO),
             json_dumps(
                 {
-                    "level": payload.level,
                     "event": payload.event,
+                    "level": payload.level,
                     "message": payload.message,
                     "context": payload.context or {},
                 }
-            )
+            ),
         )
         return {"ok": True}
 

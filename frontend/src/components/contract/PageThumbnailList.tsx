@@ -1,5 +1,12 @@
+import { useEffect, useRef } from "react";
+import { getApiBaseUrlSync } from "../../services/api";
 import { cn } from "../../lib/cn";
 import type { ContractPage } from "../../types/contract";
+
+function resolveImageUrl(path: string | null | undefined) {
+  if (!path) return null;
+  return path.startsWith("http") ? path : `${getApiBaseUrlSync()}${path}`;
+}
 
 export function PageThumbnailList({
   pages,
@@ -10,28 +17,42 @@ export function PageThumbnailList({
   activePage: number;
   onSelect: (page: number) => void;
 }) {
+  const activeRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activePage]);
+
   return (
-    <div className="thin-scrollbar flex max-h-[calc(100vh-21rem)] gap-3 overflow-x-auto pb-2 xl:max-h-none xl:flex-col xl:overflow-y-auto xl:pr-1">
-      {pages.map((page) => (
-        <button
-          key={page.page}
-          type="button"
-          onClick={() => onSelect(page.page)}
-          className={cn(
-            "min-w-[148px] rounded-2xl border px-3 py-3 text-left transition xl:min-w-0",
-            activePage === page.page
-              ? "border-cyan-300/40 bg-cyan-400/10"
-              : "border-white/8 bg-white/[0.03] hover:border-cyan-400/24",
-          )}
-        >
-          <div className="rounded-xl border border-white/8 bg-slate-100/95 px-3 py-5 text-slate-700">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">
-              Page {page.page}
+    <div className="thin-scrollbar flex h-full gap-3 overflow-x-auto pb-2 xl:flex-col xl:overflow-y-auto xl:pr-1">
+      {pages.map((page) => {
+        const imageUrl = resolveImageUrl(page.imageUrl);
+        const active = activePage === page.page;
+        return (
+          <button
+            key={page.page}
+            ref={active ? activeRef : undefined}
+            type="button"
+            onClick={() => onSelect(page.page)}
+            className={cn(
+              "min-w-[168px] rounded-[20px] border p-3 text-left transition xl:min-w-0",
+              active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/8 bg-white/[0.03] hover:border-cyan-400/24",
+            )}
+          >
+            <div className="overflow-hidden rounded-[16px] border border-white/8 bg-slate-100/95">
+              {imageUrl ? (
+                <img src={imageUrl} alt={`第 ${page.page} 页`} className="h-[176px] w-full object-cover object-top" />
+              ) : (
+                <div className="flex h-[176px] items-center justify-center px-4 text-sm text-slate-500">暂无页预览</div>
+              )}
             </div>
-            <div className="mt-2 line-clamp-2 text-sm font-semibold">{page.title}</div>
-          </div>
-        </button>
-      ))}
+            <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">Page {page.page}</div>
+              <div className="mt-2 text-sm font-semibold text-white">第 {page.page} 页</div>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }

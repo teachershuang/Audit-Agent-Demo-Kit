@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -25,15 +26,63 @@ class TaskRecord:
     verification_items: list[VerificationItem] = field(default_factory=list)
     agent_steps: list[AgentStep] = field(default_factory=list)
     started_at_perf: float = field(default_factory=perf_counter)
-    analysis_job: asyncio.Task | None = None
+    analysis_job: asyncio.Future | None = None
 
 
 class LocalStore:
     def __init__(self, base_dir: Path) -> None:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.tasks_dir = self.base_dir / "tasks"
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: dict[str, TaskRecord] = {}
         self._relations: list[RelationConfig] = build_default_relations()
+        self._load_persisted_tasks()
+
+    def _task_file_path(self, task_id: str) -> Path:
+        return self.tasks_dir / f"{task_id}.json"
+
+    def _persist_record(self, record: TaskRecord) -> None:
+        payload = {
+            "task": record.task.model_dump(mode="json"),
+            "file_path": str(record.file_path) if record.file_path else None,
+            "use_builtin_example": record.use_builtin_example,
+            "result": record.result.model_dump(mode="json") if record.result else None,
+            "audit_focuses": [item.model_dump(mode="json") for item in record.audit_focuses],
+            "verification_items": [item.model_dump(mode="json") for item in record.verification_items],
+            "agent_steps": [item.model_dump(mode="json") for item in record.agent_steps],
+        }
+        self._task_file_path(record.task.taskId).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _load_persisted_tasks(self) -> None:
+        for path in sorted(self.tasks_dir.glob("task_*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                task = ContractTask.model_validate(payload["task"])
+                result = (
+                    ContractAnalysisResult.model_validate(payload["result"])
+                    if payload.get("result") is not None
+                    else None
+                )
+                record = TaskRecord(
+                    task=task,
+                    file_path=Path(payload["file_path"]) if payload.get("file_path") else None,
+                    use_builtin_example=bool(payload.get("use_builtin_example", True)),
+                    result=result,
+                    audit_focuses=[
+                        AuditFocus.model_validate(item) for item in payload.get("audit_focuses", [])
+                    ],
+                    verification_items=[
+                        VerificationItem.model_validate(item) for item in payload.get("verification_items", [])
+                    ],
+                    agent_steps=[AgentStep.model_validate(item) for item in payload.get("agent_steps", [])],
+                )
+                self._tasks[task.taskId] = record
+            except Exception:
+                continue
 
     def create_task(
         self,
@@ -57,12 +106,16 @@ class LocalStore:
         )
         record = TaskRecord(task=task, file_path=file_path, use_builtin_example=use_builtin_example)
         self._tasks[task_id] = record
+        self._persist_record(record)
         return record
 
     def get_task(self, task_id: str) -> TaskRecord:
         if task_id not in self._tasks:
             raise KeyError(task_id)
         return self._tasks[task_id]
+
+    def list_tasks(self) -> list[TaskRecord]:
+        return list(self._tasks.values())
 
     def save_result(
         self,
@@ -76,12 +129,25 @@ class LocalStore:
         result.task.elapsedMs = int((perf_counter() - record.started_at_perf) * 1000)
         result.task.progressPercent = 100
         result.task.currentStage = "completed"
-        result.task.stageDetail = "分析结果已生成，可查看章节、条款、关注事项与证据链。"
+        if result.task.knowledgeBaseReview is None and record.task.knowledgeBaseReview is not None:
+            result.task.knowledgeBaseReview = record.task.knowledgeBaseReview
+        if result.task.knowledgeBaseReview and result.task.knowledgeBaseReview.status == "completed":
+            result.task.stageDetail = result.task.knowledgeBaseReview.message or "制度校验已完成，可查看右侧结果。"
+        else:
+            result.task.stageDetail = "分析结果已生成，可查看章节、条款、关注事项与证据链。"
         record.task = result.task
         record.result = result
         record.audit_focuses = audit_focuses
         record.verification_items = verification_items
         record.agent_steps = agent_steps
+        self._persist_record(record)
+        return record
+
+    def replace_result(self, task_id: str, result: ContractAnalysisResult) -> TaskRecord:
+        record = self.get_task(task_id)
+        result.task = record.task.model_copy(deep=True)
+        record.result = result
+        self._persist_record(record)
         return record
 
     def update_task(
@@ -92,6 +158,7 @@ class LocalStore:
         progress_percent: int | None = None,
         current_stage: str | None = None,
         stage_detail: str | None = None,
+        knowledge_base_review=None,
     ) -> ContractTask:
         record = self.get_task(task_id)
         if status is not None:
@@ -102,7 +169,12 @@ class LocalStore:
             record.task.currentStage = current_stage
         if stage_detail is not None:
             record.task.stageDetail = stage_detail
+        if knowledge_base_review is not None:
+            record.task.knowledgeBaseReview = knowledge_base_review
         record.task.elapsedMs = int((perf_counter() - record.started_at_perf) * 1000)
+        if record.result is not None:
+            record.result.task = record.task.model_copy(deep=True)
+        self._persist_record(record)
         return record.task
 
     def list_relations(self) -> list[RelationConfig]:

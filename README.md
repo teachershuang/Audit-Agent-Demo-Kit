@@ -1,166 +1,251 @@
-# 合同智能解析与审计关注点 Agent
+# Audit Agent Demo Kit
 
-面向审计与风控场景的合同智能理解工作台。系统支持上传合同 PDF 或图片，自动完成章节还原、条款标签识别、关键信息抽取、证据定位、审计关注事项生成、校验记录生成和左右联动审阅。
+[![Stars](https://img.shields.io/github/stars/teachershuang/Audit-Agent-Demo-Kit?style=flat-square)](https://github.com/teachershuang/Audit-Agent-Demo-Kit/stargazers)
+[![Forks](https://img.shields.io/github/forks/teachershuang/Audit-Agent-Demo-Kit?style=flat-square)](https://github.com/teachershuang/Audit-Agent-Demo-Kit/network/members)
+[![Issues](https://img.shields.io/github/issues/teachershuang/Audit-Agent-Demo-Kit?style=flat-square)](https://github.com/teachershuang/Audit-Agent-Demo-Kit/issues)
+[![License](https://img.shields.io/github/license/teachershuang/Audit-Agent-Demo-Kit?style=flat-square)](./LICENSE)
+[![Backend](https://img.shields.io/badge/backend-FastAPI-0f766e?style=flat-square)](https://fastapi.tiangolo.com/)
+[![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-1d4ed8?style=flat-square)](https://vitejs.dev/)
 
-## 项目介绍
+面向审计 / 风控场景的合同智能理解与制度审查 Agent 工作台。
 
-本项目的定位不是传统 OCR 工具，也不是固定规则系统，而是一个可扩展的 Agent 架构原型：
+项目包含两个共享同一后端的工作区：
+- 合同智能解析工作台：上传合同，完成 OCR / 结构理解 / 条款抽取 / 证据定位 / 审计关注点生成。
+- 智能审查底座：管理制度、范本和规则，把合同结果进一步映射到制度依据、范本比对和规则校验。
 
-1. 用大模型理解合同结构与条款业务语义。
-2. 所有输出必须可以回到原文证据。
-3. 审计输出表达为关注事项、疑似风险、待核验事项。
-4. 为后续规则引擎、知识图谱、企业关系数据、RPA/API 预留接入点。
+如果这个项目对你有帮助，欢迎点一个 [Star](https://github.com/teachershuang/Audit-Agent-Demo-Kit/stargazers)。
 
-## 技术栈
+## Screenshots
+
+### 合同解析工作台
+![Analysis Home](./docs/screenshots/analysis-home.png)
+
+### 解析结果与证据联动
+![Analysis Loaded](./docs/screenshots/analysis-loaded.png)
+
+### 高信息密度工作台视图
+![Analysis Focus](./docs/screenshots/analysis-focus.png)
+
+## Why This Project
+
+这个仓库不是简单的 OCR 页面，也不是固定规则审查器。它的目标是把下面几件事放到同一个可演示、可扩展的 Agent 工作流里：
+
+- 合同结构理解：从原始 PDF / 图片中恢复章节、条款和业务结构。
+- 证据可回溯：模型输出必须能回到合同原文和高亮区域。
+- 审计关注点生成：输出的是“关注方向 / 待核验事项”，不是黑盒结论。
+- 规则与关系扩展：为规则引擎、知识图谱、企业关系库、外部 API 预留统一接入点。
+- 制度审查联动：不仅看合同文本，还能进一步映射范本、制度依据和规则命中。
+
+## Core Features
+
+### 合同解析工作台
+- PDF / 图片合同上传
+- 扫描件与文字件双链路解析
+- 章节还原
+- 条款标签识别
+- 关键信息抽取
+- 证据定位与左右联动高亮
+- 审计配置驱动的关注点生成
+- 模型档位切换：公网 / 内网
+- Agent 过程日志与校验面板
+
+### 智能审查底座
+- 制度 / 范本 / 规则入库
+- 文档版本管理
+- 模板匹配与条款比对
+- 制度依据检索
+- GoRules / 外部规则引擎适配
+- 审查报告汇总与预览
+
+## Project Structure
 
 ```text
-frontend/   React + Vite + TypeScript + Tailwind + Zustand + Framer Motion
-backend/    FastAPI + Pydantic + Qwen + PyMuPDF
-docs/       API 文档与架构说明
+backend/
+  app/
+    agents/        # 合同解析、审计关注点、校验等 Agent
+    api/           # 制度底座相关 API
+    prompts/       # Prompt 模板
+    reviewer/      # 制度审查流水线
+    routers/       # FastAPI 路由
+    services/      # OCR、Qwen、证据定位、运行时模型切换等
+    tools/         # 规则引擎 / 外部适配器
+frontend/
+  src/
+    components/    # 合同查看、条款卡片、配置面板等
+    pages/         # 智能审查底座页面
+    services/      # 前端 API 层
+    store/         # Zustand 状态管理
+docs/
+  api.md
+  architecture.md
+  quickstart.md
+  screenshots/
+scripts/
+  start_backend.ps1
+  start_frontend.ps1
+  start_all.ps1
 ```
 
-## 启动方式
+## Tech Stack
 
-### 1. 启动后端
+- Frontend: React, Vite, TypeScript, Tailwind CSS, Framer Motion, Zustand
+- Backend: FastAPI, Pydantic, Uvicorn, httpx
+- Document Processing: PyMuPDF, Pillow, Python DOCX
+- Models: Qwen-compatible OpenAI API, DeepSeek-compatible text model, optional internal profile
+- Retrieval / Rule Layer: Redis, embeddings, GoRules adapter, external knowledge hooks
 
-```bash
-cd backend
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+## Quick Start
+
+详细说明见 [docs/quickstart.md](./docs/quickstart.md)。
+
+### 1. Environment
+
+推荐 Python 环境：
+
+```powershell
+conda create -n contract_audit_base python=3.11 -y
+conda activate contract_audit_base
 ```
 
-### 2. 启动前端
+安装后端依赖：
 
-```bash
-cd frontend
+```powershell
+pip install -r .\backend\requirements.txt
+```
+
+安装前端依赖：
+
+```powershell
+cd .\frontend
 npm install
-npm run dev
+cd ..
 ```
 
-打开 [http://127.0.0.1:5173](http://127.0.0.1:5173)。
+### 2. Configure
 
-## 环境变量配置
+复制环境变量模板：
 
-将根目录 [.env.example](/E:/meeting_test/.env.example) 复制为 `.env`，按需填写：
-
-```env
-VITE_API_BASE_URL=http://127.0.0.1:8000
-QWEN_API_KEY=
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-QWEN_MODEL_NAME=qwen-plus
-APP_NAME=合同智能解析与审计关注点 Agent
-APP_ENV=development
+```powershell
+Copy-Item .env.example .env
 ```
 
-说明：
+至少补齐：
+- `QWEN_API_KEY`
+- `QWEN_BASE_URL`
+- `QWEN_MODEL_NAME`
+- `LLM_API_KEY`
+- `LLM_BASE_URL`
+- `LLM_MODEL`
 
-1. `QWEN_API_KEY` 为空时，分析接口不会执行真实解析。
-2. `QWEN_BASE_URL` 支持 OpenAI-compatible 接口。
-3. 文字型 PDF 优先走 PDF 文本抽取，扫描件或图片走 Qwen-VL OCR。
+如果你有内网模型链路，也可以补齐：
+- `INTERNAL_QWEN_API_KEY`
+- `INTERNAL_QWEN_BASE_URL`
+- `INTERNAL_QWEN_MODEL_NAME`
+- `INTERNAL_PADDLE_REMOTE_BASE_URL`
 
-## 示例合同说明
+### 3. Start
 
-页面支持“快速载入”内置示例合同。这个入口会生成真实合同页图，并复用渲染阶段的文本坐标作为示例原文块；章节还原、条款标签、关键信息抽取、审计关注事项和校验记录仍然全部走真实 Agent 解析链路，不直接返回预制分析结果。
+一键启动：
 
-## Qwen 接入方式
-
-统一封装位于 [backend/app/services/qwen_service.py](/E:/meeting_test/backend/app/services/qwen_service.py)：
-
-```python
-class QwenService:
-    async def chat_json(self, system_prompt: str, user_prompt: str, schema: dict) -> dict:
-        ...
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_all.ps1
 ```
 
-能力说明：
+默认地址：
+- Frontend: [http://127.0.0.1:5173](http://127.0.0.1:5173)
+- Backend: [http://127.0.0.1:8010](http://127.0.0.1:8010)
 
-1. 使用 `/chat/completions` 接口调用 Qwen。
-2. 所有输出强制为 JSON。
-3. 内置 JSON 修复。
-4. 使用 `jsonschema` 做 schema 校验。
-5. OCR 视觉链路使用 `qwen-vl-plus`。
+## Runtime Modes
 
-## 前端页面说明
+项目支持运行时模型档位切换：
 
-主页面是高密度企业审阅工作台：
+- 公网模型
+  - 文本：`deepseek-v4-flash`
+  - 多模态：`qwen-vl-plus`
+  - 适合标准演示与扫描件识别
+- 内网模型
+  - 文本：`Qwen3.6-35B-A3B-GGUF`
+  - OCR：内网 Paddle 服务
+  - 适合内网受限环境部署
 
-1. 顶部任务栏：任务状态、模型名称、总览置信度、上传、重新解析、导出。
-2. 左侧合同原件区：真实页图、缩放、滚动、证据高亮、点击联动。
-3. 右侧分析区：章节还原、条款标签、关系配置、审计关注事项、校验与证据链、Agent 过程日志。
-4. 底部状态带：任务编号、Agent 执行状态、模型服务、证据链状态。
+前端顶部可直接切换档位，并实时展示文本模型、多模态状态和 OCR 状态。
 
-## Agent 执行流程
+## API Overview
+
+完整 API 见 [docs/api.md](./docs/api.md)。
+
+关键接口：
 
 ```text
-用户上传合同
-  -> ContractAgent 创建任务
-  -> DocumentService 判断文档类型
-  -> OCRService 执行 PDF 文本抽取或 Qwen-VL OCR
-  -> ContractParserAgent 还原章节结构
-  -> ContractParserAgent 识别条款标签
-  -> ContractParserAgent 抽取关键信息
-  -> EvidenceService 建立证据回链
-  -> AuditFocusAgent 生成审计关注事项
-  -> VerificationAgent 输出校验记录
-  -> ConfidenceService 汇总置信度
-  -> 前端工作台展示
+POST /api/contracts/upload
+POST /api/contracts/{task_id}/analyze
+GET  /api/contracts/{task_id}
+GET  /api/contracts/{task_id}/result
+
+GET  /api/config/relations
+POST /api/config/relations
+PUT  /api/config/relations/{relation_id}
+DELETE /api/config/relations/{relation_id}
+
+POST /api/runtime/model-profiles/switch
+POST /api/audit/generate
 ```
 
-## 数据结构说明
+## Architecture
 
-关键结构定义位于：
+详细架构说明见 [docs/architecture.md](./docs/architecture.md)。
 
-1. [backend/app/schemas/contract.py](/E:/meeting_test/backend/app/schemas/contract.py)
-2. [backend/app/schemas/audit.py](/E:/meeting_test/backend/app/schemas/audit.py)
-3. [backend/app/schemas/relation.py](/E:/meeting_test/backend/app/schemas/relation.py)
-4. [backend/app/schemas/agent.py](/E:/meeting_test/backend/app/schemas/agent.py)
+核心链路：
 
-核心对象包括：
+```mermaid
+flowchart TD
+    A["Upload Contract"] --> B["DocumentService"]
+    B --> C["OCRService"]
+    C --> D["ContractParserAgent"]
+    D --> E["EvidenceService"]
+    D --> F["AuditFocusAgent"]
+    D --> G["VerificationAgent"]
+    F --> H["RuleEngineAdapter / Relation Config"]
+    G --> I["ConfidenceService"]
+    E --> J["Frontend Workbench"]
+    H --> J
+    I --> J
+    J --> K["Knowledge Base Review Pipeline"]
+    K --> L["Template / Policy / Rules / Report"]
+```
 
-1. `ContractSection`
-2. `ClauseTag`
-3. `KeyFact`
-4. `RelationConfig`
-5. `AuditFocus`
-6. `VerificationItem`
-7. `AgentStep`
+## Logging
 
-## 关系配置说明
+日志目录默认在：
 
-“关系配置”是用户可配置的分析上下文，不是死规则：
+- `.\.run-logs\backend.app.log`
+- `.\.run-logs\frontend.app.log`
+- `.\.run-logs\sessions\*.stdout.log`
+- `.\.run-logs\sessions\*.stderr.log`
 
-1. 可新增、编辑、启用、停用关系项。
-2. 可配置风险提示词、工具来源、优先级。
-3. 修改后可重新生成审计关注事项。
-4. 涉及关联交易、供应商关系、账户异常等事项时，输出必须表达为疑似或待核验。
+日志内容包含：
+- 前后端请求参数摘要
+- 模型调用耗时
+- 规则引擎请求 / 返回记录
+- 解析任务阶段进度
+- 错误与异常堆栈
 
-## 扫描件与证据定位说明
+## Open Source Roadmap
 
-当前扫描件定位方式：
+- 更稳定的扫描件多阶段解析
+- 更强的跨页条款引用结构化
+- 知识图谱 / 企业关系数据接入
+- GoRules / DMN / 自定义规则市场
+- 人工复核编排与审计闭环
 
-1. PDF 每页先渲染成页图。
-2. 文字型 PDF 优先取原生文本块和坐标。
-3. 低文本量页面或图片合同走 Qwen-VL OCR，返回归一化 `bbox`。
-4. `EvidenceService` 再将章节、条款、关键信息锚定回 OCR 或 PDF block。
+## Documents
 
-定位精度说明：
+- [Quick Start](./docs/quickstart.md)
+- [Architecture](./docs/architecture.md)
+- [API](./docs/api.md)
+- [Support](./SUPPORT.md)
+- [Contributing](./CONTRIBUTING.md)
 
-1. 文字型 PDF 的定位通常更稳定。
-2. 扫描件的定位精度受清晰度、版式、倾斜、遮挡影响。
-3. 当前更适合段落级和块级证据定位，不承诺词级精确框选。
+## License
 
-## API 文档
-
-1. [docs/api.md](/E:/meeting_test/docs/api.md)
-2. [docs/architecture.md](/E:/meeting_test/docs/architecture.md)
-
-## 后续扩展路线
-
-1. 接入 MinerU 或更细粒度版面分析能力，增强复杂 PDF 拆解。
-2. 接入规则引擎，补充必备条款、金额比例、付款约束等硬规则校验。
-3. 接入知识图谱和企业关系数据，用于供应商、股东、法人、实控人关系核验。
-4. 接入 RPA/API，对接合同、付款、发票、验收、审批等系统。
-
-## Git 记录
-
-当前已完成本地 Git 提交，包括项目初始化、前端工作台、后端 Agent 架构和真实解析链路接入。若需要推送到远端仓库，还需要本机提供 Git 远端认证上下文。
+本项目采用 [MIT License](./LICENSE)。

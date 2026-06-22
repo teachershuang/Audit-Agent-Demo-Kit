@@ -37,21 +37,54 @@ CLAUSE_LABELS = [
 
 DEFAULT_OVERVIEW_FACTS = {
     "合同编号": "未提取",
-    "主体摘要": "待提取",
-    "甲乙方信息": "待提取",
-    "服务内容": "待提取",
+    "主体摘要": "待补充",
+    "甲乙方信息": "待补充",
+    "服务内容": "待补充",
 }
+
+HEADING_PATTERNS = (
+    r"^第[一二三四五六七八九十百零\d]+[章节条款部分]",
+    r"^[一二三四五六七八九十]+、",
+    r"^\d+[.、]",
+    r"^[（(][一二三四五六七八九十\d]+[)）]",
+)
 
 
 class ContractParserAgent:
     def __init__(self, qwen_service: QwenService, settings: Settings) -> None:
         self.qwen_service = qwen_service
-        self.parallelism = max(1, settings.qwen_parallel_requests)
-        self.key_fact_batch_size = max(2, settings.key_fact_batch_size)
+        self.settings = settings
+
+    @property
+    def parallelism(self) -> int:
+        return max(1, self.settings.qwen_parallel_requests)
+
+    @property
+    def key_fact_batch_size(self) -> int:
+        return max(2, self.settings.key_fact_batch_size)
+
+    @property
+    def section_batch_size(self) -> int:
+        return max(2, self.settings.section_batch_size)
+
+    @property
+    def clause_batch_size(self) -> int:
+        return max(2, self.settings.clause_batch_size)
+
+    @property
+    def batch_overlap(self) -> int:
+        return max(0, self.settings.section_batch_overlap)
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
-        items = await self._request_sections(pages)
-        sections = self._build_sections_from_items(items, pages)
+        windows = self._build_page_windows(pages, self.section_batch_size, self.batch_overlap)
+        tasks = [self._request_section_batch(window) for window in windows]
+        raw_batches = await self._gather_limited(tasks, min(self.parallelism, max(1, len(tasks)))) if tasks else []
+
+        flattened: list[dict[str, Any]] = []
+        for batch in raw_batches:
+            flattened.extend(batch)
+
+        sections = self._build_sections_from_items(flattened, pages)
         if sections:
             return sections
         return self._derive_sections_locally(pages)
@@ -62,8 +95,16 @@ class ContractParserAgent:
         sections: list[ContractSection],
         relations: list[RelationConfig] | None = None,
     ) -> list[ClauseTag]:
-        items = await self._request_clauses(pages, sections, relations or [])
-        clauses = self._build_clauses_from_items(items, pages)
+        relations = relations or []
+        windows = self._build_page_windows(pages, self.clause_batch_size, self.batch_overlap)
+        tasks = [self._request_clause_batch(window, sections, relations) for window in windows]
+        raw_batches = await self._gather_limited(tasks, min(self.parallelism, max(1, len(tasks)))) if tasks else []
+
+        flattened: list[dict[str, Any]] = []
+        for batch in raw_batches:
+            flattened.extend(batch)
+
+        clauses = self._build_clauses_from_items(flattened, pages, sections)
         if clauses:
             return self._dedupe_clauses(clauses)
         return self._dedupe_clauses(self._derive_clauses_locally(pages, sections))
@@ -74,7 +115,8 @@ class ContractParserAgent:
         clauses: list[ClauseTag],
         relations: list[RelationConfig] | None = None,
     ) -> list[KeyFact]:
-        requested_fields = self._extract_requested_fact_fields(relations or [])
+        relations = relations or []
+        requested_fields = self._extract_requested_fact_fields(relations)
         derived_facts = self._dedupe_key_facts(
             self._derive_key_facts_from_pages(pages) + self._derive_key_facts_from_clauses(clauses)
         )
@@ -84,7 +126,7 @@ class ContractParserAgent:
         batch_tasks = [self._request_key_facts(batch, requested_fields) for batch in clause_batches]
 
         overview_result, raw_batches = await asyncio.gather(
-            self._safe_list_call(overview_task),
+            self._safe_key_fact_call(overview_task),
             self._gather_limited(batch_tasks, min(self.parallelism, max(1, len(batch_tasks))))
             if batch_tasks
             else self._empty_batches(),
@@ -101,23 +143,24 @@ class ContractParserAgent:
         self._ensure_required_overview_facts(merged)
         return self._dedupe_key_facts(merged)
 
-    async def _request_sections(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
-        prompt = build_section_semantic_prompt(self._pages_payload(pages))
+    async def _request_section_batch(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
+        prompt = build_section_semantic_prompt(self._pages_payload(pages, mode="section"))
         payload = await self.qwen_service.chat_json(
             system_prompt=prompt.system,
             user_prompt=prompt.user,
             schema={"type": "object"},
-            timeout=120,
+            timeout=90,
         )
         return self._pick_first_array(payload, ["sections", "chapterTree", "chapter_tree"])
 
-    async def _request_clauses(
+    async def _request_clause_batch(
         self,
         pages: list[ContractPage],
         sections: list[ContractSection],
         relations: list[RelationConfig],
     ) -> list[dict[str, Any]]:
-        section_payload = [
+        page_numbers = {page.page for page in pages}
+        scoped_sections = [
             {
                 "id": section.id,
                 "title": section.title,
@@ -127,11 +170,12 @@ class ContractParserAgent:
                 "sectionCode": section.sectionCode,
                 "summary": section.summary,
             }
-            for section in sections[:64]
-        ]
+            for section in sections
+            if section.page in page_numbers
+        ][:40]
         prompt = build_clause_semantic_prompt(
-            page_payload=self._pages_payload(pages),
-            section_payload=section_payload,
+            page_payload=self._pages_payload(pages, mode="clause"),
+            section_payload=scoped_sections,
             clause_labels=CLAUSE_LABELS,
             relation_payload=build_audit_config_prompt_context(relations),
         )
@@ -139,7 +183,7 @@ class ContractParserAgent:
             system_prompt=prompt.system,
             user_prompt=prompt.user,
             schema={"type": "object"},
-            timeout=150,
+            timeout=110,
         )
         return self._pick_first_array(payload, ["clauses", "clauseTags", "clause_tags"])
 
@@ -156,20 +200,20 @@ class ContractParserAgent:
                 "title": clause.title,
                 "sectionTitle": clause.sectionTitle,
                 "summary": clause.summary,
-                "rawText": clause.rawText[:360],
-                "references": clause.references,
+                "rawText": clause.rawText[:220],
+                "references": clause.references[:6],
                 "structuredFields": clause.structuredFields,
                 "page": clause.page,
                 "confidence": clause.confidence,
             }
-            for clause in clauses[:48]
+            for clause in clauses[:32]
         ]
         prompt = build_key_fact_prompt(clause_payload, requested_fields)
         payload = await self.qwen_service.chat_json(
             system_prompt=prompt.system,
             user_prompt=prompt.user,
             schema={"type": "object"},
-            timeout=90,
+            timeout=70,
         )
         return self._pick_first_array(payload, ["keyFacts", "facts", "key_facts"])
 
@@ -184,28 +228,32 @@ class ContractParserAgent:
                 "label": clause.label,
                 "summary": clause.summary,
                 "page": clause.page,
-                "rawText": clause.rawText[:360],
+                "rawText": clause.rawText[:200],
             }
-            for clause in clauses[:12]
+            for clause in clauses[:10]
         ]
         page_payload = [
             {
                 "page": page.page,
-                "text": "\n".join(self._clean(block.text) for block in page.blocks[:32])[:2200],
+                "text": "\n".join(self._clean(block.text) for block in page.blocks[:18])[:1600],
             }
-            for page in pages[:3]
+            for page in pages[:2]
         ]
 
         payload: dict[str, Any] | None = None
         first_page = pages[0] if pages else None
         first_page_image = Path(first_page.imageLocalPath) if first_page and first_page.imageLocalPath else None
-        if first_page_image and first_page_image.exists():
+        if (
+            first_page_image
+            and first_page_image.exists()
+            and self.settings.qwen_vision_model_name
+        ):
             try:
                 payload = await self.qwen_service.vision_json(
                     prompt=build_overview_vl_prompt(),
                     image_path=first_page_image,
                     schema={"type": "object"},
-                    timeout=120,
+                    timeout=90,
                 )
             except Exception:
                 payload = None
@@ -216,7 +264,7 @@ class ContractParserAgent:
                 system_prompt=prompt.system,
                 user_prompt=prompt.user,
                 schema={"type": "object"},
-                timeout=90,
+                timeout=70,
             )
 
         facts: list[KeyFact] = []
@@ -232,7 +280,8 @@ class ContractParserAgent:
         pages: list[ContractPage],
     ) -> list[ContractSection]:
         sections: list[ContractSection] = []
-        seen: set[tuple[int, str]] = set()
+        best_by_key: dict[tuple[int, str], ContractSection] = {}
+
         for index, item in enumerate(items, start=1):
             title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
             if not title:
@@ -240,25 +289,25 @@ class ContractParserAgent:
             evidence_text = self._clean(item.get("evidenceText") or item.get("snippet") or title)
             page = self._coerce_page(item.get("page"), pages, evidence_text)
             key = (page, title)
-            if key in seen:
-                continue
-            seen.add(key)
-            sections.append(
-                ContractSection(
-                    id=f"section_{len(sections) + 1:03d}",
-                    title=title,
-                    level=self._coerce_level(item.get("level")),
-                    page=page,
-                    summary=self._compact_summary(self._clean(item.get("summary")) or evidence_text, 80),
-                    confidence=self._clamp_confidence(item.get("confidence")),
-                    sortOrder=self._coerce_sort_order(item.get("sortOrder"), index),
-                    sectionCode=self._clean(item.get("sectionCode")) or self._extract_section_code(title),
-                    sectionPath=self._clean(item.get("sectionPath")) or None,
-                    blockIds=[],
-                    evidenceId=None,
-                )
+            candidate = ContractSection(
+                id=f"section_{index:03d}",
+                title=title[:120],
+                level=self._coerce_level(item.get("level")),
+                page=page,
+                summary=self._compact_summary(self._clean(item.get("summary")) or evidence_text or title, 80),
+                confidence=self._clamp_confidence(item.get("confidence")),
+                sortOrder=index,
+                sectionCode=self._clean(item.get("sectionCode")) or self._extract_section_code(title),
+                sectionPath=self._clean(item.get("sectionPath")) or None,
+                blockIds=[],
+                evidenceId=None,
             )
-        sections.sort(key=lambda item: (item.page, item.sortOrder))
+            current = best_by_key.get(key)
+            if current is None or (candidate.confidence, len(candidate.summary)) > (current.confidence, len(current.summary)):
+                best_by_key[key] = candidate
+
+        sections = list(best_by_key.values())
+        sections.sort(key=lambda item: (item.page, item.sortOrder, item.level, item.title))
         for index, section in enumerate(sections, start=1):
             section.id = f"section_{index:03d}"
             section.sortOrder = index
@@ -268,6 +317,7 @@ class ContractParserAgent:
         self,
         items: list[dict[str, Any]],
         pages: list[ContractPage],
+        sections: list[ContractSection],
     ) -> list[ClauseTag]:
         clauses: list[ClauseTag] = []
         for index, item in enumerate(items, start=1):
@@ -279,37 +329,35 @@ class ContractParserAgent:
                 self._clean(item.get("rawText") or item.get("text") or item.get("quote")),
                 260,
             )
-            summary = self._compact_summary(self._clean(item.get("summary")) or raw_text, 80)
-            page = self._coerce_page(item.get("page"), pages, raw_text or summary)
-            references = self._normalize_reference_list(item.get("references"))
+            summary = self._compact_summary(self._clean(item.get("summary")) or raw_text or label, 80)
+            page = self._coerce_page(item.get("page"), pages, raw_text or summary or label)
             structured_fields = self._normalize_structured_fields(item.get("structuredFields"))
-            clauses.append(
-                ClauseTag(
-                    id=f"clause_{index:03d}",
+            clause = ClauseTag(
+                id=f"clause_{index:03d}",
+                label=label[:80],
+                coreLabel=core_label,
+                labelSource=self._normalize_label_source(
+                    item.get("labelSource") or item.get("label_source"),
                     label=label,
-                    coreLabel=core_label,
-                    labelSource=self._normalize_label_source(
-                        item.get("labelSource") or item.get("label_source"),
-                        label=label,
-                        core_label=core_label,
-                    ),
-                    title=self._clean(item.get("title")) or label,
-                    summary=summary,
-                    rawText=raw_text or summary,
-                    page=page,
-                    confidence=self._clamp_confidence(item.get("confidence")),
-                    sortOrder=self._coerce_sort_order(item.get("sortOrder"), index),
-                    sectionTitle=self._clean(item.get("sectionTitle")) or None,
-                    references=references,
-                    structuredFields=structured_fields,
-                    anchorText=(self._clean(item.get("anchorText")) or raw_text[:120]) if raw_text else None,
-                    blockIds=[],
-                    evidenceId="",
-                    needHumanReview=self._to_bool(item.get("needHumanReview") or item.get("need_human_review")),
-                    discoveryReason=self._clean(item.get("discoveryReason") or item.get("discovery_reason")) or None,
-                    relatedAuditFocusIds=[],
-                )
+                    core_label=core_label,
+                ),
+                title=self._clean(item.get("title")) or label[:80],
+                summary=summary,
+                rawText=raw_text or summary,
+                page=page,
+                confidence=self._clamp_confidence(item.get("confidence")),
+                sortOrder=index,
+                sectionTitle=self._clean(item.get("sectionTitle")) or self._nearest_section_title(page, sections),
+                references=self._normalize_reference_list(item.get("references") or self._extract_cross_references(raw_text)),
+                structuredFields=structured_fields,
+                anchorText=(self._clean(item.get("anchorText")) or raw_text[:120]) if raw_text else None,
+                blockIds=[],
+                evidenceId="",
+                needHumanReview=self._to_bool(item.get("needHumanReview") or item.get("need_human_review")),
+                discoveryReason=self._clean(item.get("discoveryReason") or item.get("discovery_reason")) or None,
+                relatedAuditFocusIds=[],
             )
+            clauses.append(clause)
         return clauses
 
     def _derive_sections_locally(self, pages: list[ContractPage]) -> list[ContractSection]:
@@ -322,7 +370,7 @@ class ContractParserAgent:
                 sections.append(
                     ContractSection(
                         id=f"section_{len(sections) + 1:03d}",
-                        title=title[:80],
+                        title=title[:120],
                         level=self._infer_heading_level(title),
                         page=page.page,
                         summary=self._compact_summary(title, 80),
@@ -330,6 +378,8 @@ class ContractParserAgent:
                         sortOrder=len(sections) + 1,
                         sectionCode=self._extract_section_code(title),
                         sectionPath=None,
+                        blockIds=[],
+                        evidenceId=None,
                     )
                 )
         if sections:
@@ -342,11 +392,13 @@ class ContractParserAgent:
                 title="合同正文",
                 level=1,
                 page=pages[0].page,
-                summary="未稳定识别出显式章节标题，建议人工复核。",
+                summary="未稳定识别到显式章节标题，建议人工复核。",
                 confidence=0.35,
                 sortOrder=1,
                 sectionCode=None,
                 sectionPath=None,
+                blockIds=[],
+                evidenceId=None,
             )
         ]
 
@@ -452,60 +504,98 @@ class ContractParserAgent:
         return requested
 
     @staticmethod
-    def _pages_payload(pages: list[ContractPage]) -> list[dict[str, Any]]:
+    def _pages_payload(pages: list[ContractPage], mode: str) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
+        block_limit = 16 if mode == "section" else 20
+        page_text_limit = 1800 if mode == "section" else 2200
         for page in pages:
-            blocks = [ContractParserAgent._clean(block.text) for block in page.blocks[:40] if ContractParserAgent._clean(block.text)]
-            payload.append({"page": page.page, "title": page.title, "text": "\n".join(blocks)[:5000]})
+            selected_blocks = []
+            heading_candidates = []
+            for block in page.blocks:
+                cleaned = ContractParserAgent._clean(block.text)
+                if not cleaned:
+                    continue
+                if ContractParserAgent._looks_like_heading(cleaned):
+                    heading_candidates.append(cleaned[:120])
+                if len(selected_blocks) < block_limit:
+                    selected_blocks.append(cleaned[:160])
+            payload.append(
+                {
+                    "page": page.page,
+                    "title": page.title,
+                    "headingCandidates": heading_candidates[:10],
+                    "pageText": " ".join(selected_blocks)[:page_text_limit],
+                    "blocks": selected_blocks,
+                }
+            )
         return payload
 
     @staticmethod
-    def _normalize_core_label(label: Any) -> str:
-        text = str(label or "").strip()
+    def _build_page_windows(
+        pages: list[ContractPage],
+        batch_size: int,
+        overlap: int,
+    ) -> list[list[ContractPage]]:
+        if not pages:
+            return []
+        batch_size = max(1, batch_size)
+        step = max(1, batch_size - max(0, overlap))
+        windows: list[list[ContractPage]] = []
+        for start in range(0, len(pages), step):
+            window = pages[start : start + batch_size]
+            if not window:
+                continue
+            windows.append(window)
+            if start + batch_size >= len(pages):
+                break
+        return windows
+
+    def _normalize_core_label(self, value: Any) -> str:
+        text = self._clean(value)
+        if not text:
+            return "其他重要条款"
         alias_map = {
-            "合同主体": "甲乙方信息",
+            "合同主体信息": "甲乙方信息",
             "主体信息": "甲乙方信息",
+            "主体条款": "甲乙方信息",
             "付款方式": "付款条件",
-            "付款条款": "付款条件",
-            "金额": "合同金额",
+            "支付条件": "付款条件",
+            "合同价款": "合同金额",
+            "合同总金额": "合同金额",
             "服务内容": "服务/采购/工程内容",
             "采购内容": "服务/采购/工程内容",
             "工程内容": "服务/采购/工程内容",
-            "保密": "保密条款",
-            "争议": "争议解决",
-            "账号信息": "账户信息",
-            "账户": "账户信息",
-            "附件": "附件条款",
+            "履行期限": "履约期限",
+            "验收要求": "验收标准",
+            "验收条件": "验收标准",
+            "银行账户信息": "账户信息",
         }
-        if text in CLAUSE_LABELS:
+        normalized = alias_map.get(text, text)
+        return normalized if normalized in CLAUSE_LABELS else "其他重要条款"
+
+    def _normalize_label_source(self, value: Any, *, label: str, core_label: str) -> str:
+        text = self._clean(value).lower()
+        if text in {"core", "user_configured", "agent_discovered"}:
             return text
-        if text in alias_map:
-            return alias_map[text]
-        return "其他重要条款"
-
-    @staticmethod
-    def _normalize_label_source(label_source: Any, label: str = "", core_label: str = "") -> str:
-        text = str(label_source or "").strip().lower()
-        if text in {"agent_discovered", "agent"}:
+        if core_label == "其他重要条款" and label not in CLAUSE_LABELS:
             return "agent_discovered"
-        if text in {"user_configured", "user"}:
-            return "user_configured"
-        if label and label != core_label and label not in CLAUSE_LABELS:
-            return "agent_discovered"
-        return "core"
+        if label == core_label:
+            return "core"
+        return "user_configured"
 
-    @staticmethod
-    def _normalize_overview_label(label: str) -> str:
-        compact = label.strip()
+    def _normalize_overview_label(self, value: str) -> str:
+        compact = self._clean(value).replace(" ", "")
         alias_map = {
+            "合同编号": "合同编号",
             "协议编号": "合同编号",
             "编号": "合同编号",
+            "主体摘要": "主体摘要",
+            "合同摘要": "主体摘要",
             "主体信息摘要": "主体摘要",
-            "合同主体摘要": "主体摘要",
-            "合同基本信息": "主体摘要",
+            "甲乙方信息": "甲乙方信息",
             "合同主体信息": "甲乙方信息",
-            "双方主体信息": "甲乙方信息",
             "主体信息": "甲乙方信息",
+            "服务内容": "服务内容",
             "项目内容": "服务内容",
             "合同服务内容": "服务内容",
             "服务/采购/工程内容": "服务内容",
@@ -517,17 +607,17 @@ class ContractParserAgent:
         if not text:
             return ""
         if label == "合同编号":
-            text = self._extract_contract_number(text) or ""
-            return text or "未提取"
+            extracted = self._extract_contract_number(text)
+            return extracted or "未提取"
         if label in {"主体摘要", "甲乙方信息", "服务内容"}:
-            return self._compact_summary(text, 80) or "待提取"
+            return self._compact_summary(text, 80) or "待补充"
         if label in {"付款条件", "履约期限", "验收标准", "争议解决", "账户信息"}:
             return self._compact_summary(text, 80)
         return text
 
     def _extract_contract_number(self, text: str) -> str | None:
         patterns = [
-            re.compile(r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\\-_/().（）]{4,80})"),
+            re.compile(r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\-_/().（）]{4,80})"),
             re.compile(r"\b([A-Z]{1,8}-\d{4,}[-A-Z0-9/]*)\b"),
             re.compile(r"\b(\d{2,}-\d{4,}[A-Za-z0-9-]*)\b"),
         ]
@@ -535,7 +625,7 @@ class ContractParserAgent:
             match = pattern.search(text)
             if not match:
                 continue
-            candidate = match.group(1).strip().strip("。；;,，")
+            candidate = match.group(1).strip().strip("。；;,，:：")
             if self._looks_like_contract_number(candidate):
                 return candidate
         return None
@@ -587,7 +677,7 @@ class ContractParserAgent:
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if len(cleaned) <= limit:
             return cleaned
-        return cleaned[: max(8, limit - 1)].rstrip("，,；;：: ") + "…"
+        return cleaned[: max(8, limit - 1)].rstrip("，；。,:： ") + "…"
 
     @staticmethod
     def _to_bool(value: Any) -> bool:
@@ -604,13 +694,6 @@ class ContractParserAgent:
         except Exception:
             level = 1
         return max(1, min(level, 6))
-
-    @staticmethod
-    def _coerce_sort_order(value: Any, fallback: int) -> int:
-        try:
-            return max(1, int(value))
-        except Exception:
-            return max(1, fallback)
 
     @staticmethod
     def _coerce_page(value: Any, pages: list[ContractPage], fallback_text: str) -> int:
@@ -680,7 +763,7 @@ class ContractParserAgent:
     def _extract_contract_number_static(text: str) -> str | None:
         cleaned = ContractParserAgent._clean(text)
         patterns = [
-            re.compile(r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\\-_/().（）]{4,80})"),
+            re.compile(r"(?:合同|协议|项目)?(?:编号|备案号|合同编号|协议编号)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fa5\-_/().（）]{4,80})"),
             re.compile(r"\b([A-Z]{1,8}-\d{4,}[-A-Z0-9/]*)\b"),
             re.compile(r"\b(\d{2,}-\d{4,}[A-Za-z0-9-]*)\b"),
         ]
@@ -688,7 +771,7 @@ class ContractParserAgent:
             match = pattern.search(cleaned)
             if not match:
                 continue
-            candidate = match.group(1).strip().strip("。；;,，")
+            candidate = match.group(1).strip().strip("。；;,，:：")
             if ContractParserAgent._looks_like_contract_number(candidate):
                 return candidate
         return None
@@ -697,7 +780,9 @@ class ContractParserAgent:
     def _derive_key_facts_from_clauses(clauses: list[ClauseTag]) -> list[KeyFact]:
         facts: list[KeyFact] = []
         seen: set[tuple[str, str, int]] = set()
-        party_pattern = re.compile(r"(甲方|乙方|委托方|受托方)\s*[（(]?\s*[^):：）]*[)）]?\s*[:：]?\s*([^\n（）()]{2,80})")
+        party_pattern = re.compile(
+            r"(甲方|乙方|委托方|受托方)\s*[（(]?[)：)]?\s*[:：]?\s*([^\n（()）]{2,80})"
+        )
         amount_pattern = re.compile(r"(?:人民币|合同总额|总金额|金额)[^0-9]{0,8}([0-9][0-9,，.]*\s*(?:元|万元)?)")
 
         def add_fact(label: str, value: str, clause: ClauseTag, notes: str | None = None) -> None:
@@ -724,21 +809,16 @@ class ContractParserAgent:
             clause_key = (clause.coreLabel or clause.label).strip()
             structured = clause.structuredFields or {}
 
-            contract_number = structured.get("contractNumber")
-            if contract_number:
-                add_fact("合同编号", str(contract_number), clause, notes="来自条款结构化字段")
-
+            if structured.get("contractNumber"):
+                add_fact("合同编号", str(structured.get("contractNumber")), clause, notes="来自条款结构化字段。")
             if structured.get("serviceScope") and clause_key == "服务/采购/工程内容":
-                add_fact("服务内容", str(structured.get("serviceScope")), clause, notes="来自条款结构化字段")
-
+                add_fact("服务内容", str(structured.get("serviceScope")), clause, notes="来自条款结构化字段。")
             if structured.get("totalAmount") and clause_key == "合同金额":
-                add_fact("合同金额", str(structured.get("totalAmount")), clause, notes="来自条款结构化字段")
-
+                add_fact("合同金额", str(structured.get("totalAmount")), clause, notes="来自条款结构化字段。")
             if structured.get("paymentTrigger") and clause_key == "付款条件":
-                add_fact("付款条件", str(structured.get("paymentTrigger")), clause, notes="来自条款结构化字段")
-
+                add_fact("付款条件", str(structured.get("paymentTrigger")), clause, notes="来自条款结构化字段。")
             if structured.get("implementationDays") and clause_key == "履约期限":
-                add_fact("履约期限", str(structured.get("implementationDays")), clause, notes="来自条款结构化字段")
+                add_fact("履约期限", str(structured.get("implementationDays")), clause, notes="来自条款结构化字段。")
 
             if clause_key == "合同基本信息":
                 number_match = ContractParserAgent._extract_contract_number_static(clause.rawText)
@@ -752,7 +832,7 @@ class ContractParserAgent:
                     matched = True
                 add_fact("甲乙方信息", clause.summary, clause)
                 if not matched:
-                    add_fact("主体摘要", clause.summary, clause, notes="主体名称建议人工复核")
+                    add_fact("主体摘要", clause.summary, clause, notes="主体名称建议人工复核。")
             elif clause_key == "合同金额":
                 match = amount_pattern.search(clause.rawText)
                 add_fact("合同金额", match.group(1) if match else clause.summary, clause)
@@ -807,28 +887,22 @@ class ContractParserAgent:
     @staticmethod
     def _looks_like_heading(text: str) -> bool:
         compact = ContractParserAgent._clean(text).replace(" ", "")
-        if not compact or len(compact) > 36:
+        if not compact or len(compact) > 42:
             return False
-        heading_patterns = (
-            r"^第[一二三四五六七八九十百零0-9]+[章节条款部分]",
-            r"^[一二三四五六七八九十]+、",
-            r"^[0-9]+[.、]",
-            r"^[（(][0-9一二三四五六七八九十]+[)）]",
-        )
-        return any(re.match(pattern, compact) for pattern in heading_patterns)
+        return any(re.match(pattern, compact) for pattern in HEADING_PATTERNS)
 
     @staticmethod
     def _infer_heading_level(text: str) -> int:
         compact = ContractParserAgent._clean(text).replace(" ", "")
-        if re.match(r"^第[一二三四五六七八九十百零0-9]+[章节]", compact):
+        if re.match(r"^第[一二三四五六七八九十百零\d]+[章节]", compact):
             return 1
-        if re.match(r"^第[一二三四五六七八九十百零0-9]+[条款]", compact):
+        if re.match(r"^第[一二三四五六七八九十百零\d]+[条款]", compact):
             return 1
         if re.match(r"^[一二三四五六七八九十]+、", compact):
             return 1
-        if re.match(r"^[0-9]+[.、]", compact):
+        if re.match(r"^\d+[.、]", compact):
             return 2
-        if re.match(r"^[（(][0-9一二三四五六七八九十]+[)）]", compact):
+        if re.match(r"^[（(][一二三四五六七八九十\d]+[)）]", compact):
             return 3
         return 1
 
@@ -836,10 +910,10 @@ class ContractParserAgent:
     def _extract_section_code(text: str) -> str | None:
         compact = ContractParserAgent._clean(text).replace(" ", "")
         patterns = [
-            r"^(第[一二三四五六七八九十百零0-9]+[章节条款部分])",
+            r"^(第[一二三四五六七八九十百零\d]+[章节条款部分])",
             r"^([一二三四五六七八九十]+、)",
-            r"^([0-9]+[.、])",
-            r"^([（(][0-9一二三四五六七八九十]+[)）])",
+            r"^(\d+[.、])",
+            r"^([（(][一二三四五六七八九十\d]+[)）])",
         ]
         for pattern in patterns:
             match = re.match(pattern, compact)
@@ -871,7 +945,7 @@ class ContractParserAgent:
 
     @staticmethod
     def _extract_cross_references(text: str) -> list[str]:
-        matches = re.findall(r"(第[一二三四五六七八九十百零0-9]+条|附件[一二三四五六七八九十0-9]+)", ContractParserAgent._clean(text))
+        matches = re.findall(r"(第[一二三四五六七八九十百零\d]+条|附件[一二三四五六七八九十\d]+)", ContractParserAgent._clean(text))
         seen: set[str] = set()
         ordered: list[str] = []
         for item in matches:
@@ -886,7 +960,7 @@ class ContractParserAgent:
         if isinstance(value, list):
             items = [ContractParserAgent._clean(item) for item in value]
         elif isinstance(value, str):
-            items = re.split(r"[，,；;、\n]+", value)
+            items = re.split(r"[，,；;\n]+", value)
         else:
             items = []
         normalized: list[str] = []
@@ -901,13 +975,20 @@ class ContractParserAgent:
 
     @staticmethod
     def _normalize_structured_fields(value: Any) -> dict[str, Any]:
-        if isinstance(value, dict):
-            return {
-                ContractParserAgent._clean(key): ContractParserAgent._compact_summary(str(val), 80)
-                for key, val in value.items()
-                if ContractParserAgent._clean(key) and ContractParserAgent._clean(val)
-            }
-        return {}
+        if not isinstance(value, dict):
+            return {}
+        normalized: dict[str, Any] = {}
+        for key, val in value.items():
+            clean_key = ContractParserAgent._clean(key)
+            if not clean_key:
+                continue
+            if isinstance(val, (int, float, bool)):
+                normalized[clean_key] = val
+                continue
+            clean_value = ContractParserAgent._compact_summary(str(val), 80)
+            if clean_value:
+                normalized[clean_key] = clean_value
+        return normalized
 
     @staticmethod
     def _nearest_section_title(page_number: int, sections: list[ContractSection]) -> str | None:
@@ -926,7 +1007,7 @@ class ContractParserAgent:
         return []
 
     @staticmethod
-    async def _safe_list_call(coroutine: Any) -> list[Any]:
+    async def _safe_key_fact_call(coroutine: Any) -> list[KeyFact]:
         try:
             return await coroutine
         except Exception:
@@ -937,7 +1018,10 @@ class ContractParserAgent:
 
         async def runner(coro: Any) -> Any:
             async with semaphore:
-                return await coro
+                try:
+                    return await coro
+                except Exception:
+                    return []
 
         return await asyncio.gather(*(runner(coro) for coro in coroutines))
 

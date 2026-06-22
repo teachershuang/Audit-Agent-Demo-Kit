@@ -1,5 +1,5 @@
 export type TaskStatus = "pending_upload" | "processing" | "completed" | "needs_review";
-export type AnalysisTab = "sections" | "clauses" | "relations" | "audit" | "verification" | "logs";
+export type AnalysisTab = "sections" | "clauses" | "relations" | "audit" | "verification" | "knowledge" | "logs";
 
 export interface EvidenceRef {
   id: string;
@@ -40,7 +40,7 @@ export interface ClauseTag {
   sortOrder?: number;
   sectionTitle?: string | null;
   references?: string[];
-  structuredFields?: Record<string, string>;
+  structuredFields?: Record<string, unknown>;
   anchorText?: string | null;
   evidenceId: string;
   needHumanReview: boolean;
@@ -86,6 +86,26 @@ export interface ConfidenceOverview {
   warnings: number;
 }
 
+export interface KnowledgeBaseReviewStep {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed";
+  detail?: string | null;
+}
+
+export interface KnowledgeBaseReviewState {
+  status: "idle" | "running" | "completed" | "failed";
+  progressPercent: number;
+  currentStepId?: string | null;
+  currentStepLabel?: string | null;
+  message?: string | null;
+  detectedCategory?: string | null;
+  matchedTemplateId?: string | null;
+  matchedTemplateName?: string | null;
+  issueCount?: number | null;
+  steps: KnowledgeBaseReviewStep[];
+}
+
 export interface ContractTask {
   taskId: string;
   fileName: string;
@@ -97,6 +117,7 @@ export interface ContractTask {
   currentStage?: string | null;
   stageDetail?: string | null;
   elapsedMs?: number;
+  knowledgeBaseReview?: KnowledgeBaseReviewState | null;
 }
 
 export interface ContractAnalysisResult {

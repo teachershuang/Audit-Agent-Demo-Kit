@@ -32,7 +32,7 @@ export function RelationConfigPanel({
       {
         key: "relation_focus",
         title: "关系关注",
-        description: "用户主动定义的关系型关注主题，会影响条款理解与审计关注点生成。",
+        description: "用户主动定义的关系型关注主题，会影响条款理解与审查关注点生成。",
       },
       {
         key: "rule_check",
@@ -54,13 +54,14 @@ export function RelationConfigPanel({
   return (
     <div className="space-y-4">
       <div className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
-        <h3 className="text-base font-semibold text-white">审计配置</h3>
+        <h3 className="text-base font-semibold text-white">审查配置</h3>
         <p className="mt-2 text-sm leading-7 text-slate-300">
           配置先于合同解析存在。你可以先定义关系关注、规则校验和外部核验策略，再用同一套配置去分析不同合同。
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
+            aria-label="新增审查配置"
             onClick={() => {
               setCreating(true);
               setEditing(null);
@@ -68,11 +69,12 @@ export function RelationConfigPanel({
             className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm text-cyan-100"
           >
             <Plus className="h-4 w-4" />
-            新增审计配置
+            新增审查配置
           </button>
           {allowRegenerate ? (
             <button
               type="button"
+              aria-label="按当前配置重新生成审查关注点"
               onClick={onRegenerateAudit}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200"
             >
@@ -126,9 +128,7 @@ export function RelationConfigPanel({
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">
-                      {typeLabelMap[relation.configType]}
-                    </p>
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/60">{typeLabelMap[relation.configType]}</p>
                     <h3 className="mt-1 text-base font-semibold text-white">{relation.name}</h3>
                   </div>
                   <div className="flex items-center gap-2">
@@ -173,6 +173,7 @@ export function RelationConfigPanel({
                 <div className="mt-4 flex gap-2">
                   <button
                     type="button"
+                    aria-label={`编辑配置 ${relation.name}`}
                     onClick={() => {
                       setEditing(relation);
                       setCreating(false);
@@ -183,6 +184,7 @@ export function RelationConfigPanel({
                   </button>
                   <button
                     type="button"
+                    aria-label={`删除配置 ${relation.name}`}
                     onClick={() => onDelete(relation.id)}
                     className="inline-flex items-center gap-2 rounded-full border border-rose-400/24 bg-rose-400/10 px-4 py-2 text-sm text-rose-100"
                   >
