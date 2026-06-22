@@ -1,1 +1,1 @@
-Contract audit and policy review agent demo with evidence grounding, audit focus generation, runtime model switching, and GoRules-ready rule engine integration.
+面向审计与风控场景的合同智能解析、制度审查与规则底座 Agent 演示项目。

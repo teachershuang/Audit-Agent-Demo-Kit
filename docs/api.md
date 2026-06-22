@@ -1,16 +1,16 @@
-# API Overview
+# 接口说明
 
-Base URL:
+基础地址：
 
 ```text
 http://127.0.0.1:8010
 ```
 
-## Health & Runtime
+## 健康检查与运行时
 
 ### `GET /health`
 
-检查服务状态、当前模型档位和模型探针结果。
+检查服务状态、当前模型档位与模型探针结果。
 
 ### `GET /api/runtime/model-profiles`
 
@@ -20,7 +20,7 @@ http://127.0.0.1:8010
 
 切换当前运行时档位。
 
-Request:
+请求示例：
 
 ```json
 {
@@ -28,13 +28,13 @@ Request:
 }
 ```
 
-## Contract Analysis
+## 合同解析
 
 ### `POST /api/contracts/upload`
 
 上传合同文件。
 
-Form fields:
+表单字段：
 
 - `file`
 - `use_builtin_example`
@@ -45,7 +45,7 @@ Form fields:
 
 ### `GET /api/contracts/{task_id}`
 
-获取任务进度、当前阶段、耗时与知识底座校验状态。
+获取任务进度、当前阶段、耗时与规则校验状态。
 
 ### `GET /api/contracts/{task_id}/result`
 
@@ -65,9 +65,9 @@ Form fields:
 
 ### `POST /api/contracts/{task_id}/reanalyze-from-result`
 
-基于已编辑结果重新生成审计关注点和校验结果。
+基于已编辑结果重新生成审计关注点与校验结果。
 
-## Audit Config
+## 审计配置
 
 ### `GET /api/config/relations`
 
@@ -85,13 +85,13 @@ Form fields:
 
 删除审计配置。
 
-## Audit Focus
+## 审计关注点
 
 ### `POST /api/audit/generate`
 
-根据合同解析结果和配置重新生成审计关注点。
+基于合同解析结果与审计配置重新生成审计关注点。
 
-## Rule Engine
+## 规则引擎
 
 ### `GET /api/rules/runtime`
 
@@ -101,11 +101,11 @@ Form fields:
 
 执行规则校验。
 
-## Knowledge Base
+## 制度底座
 
 ### `POST /api/base/documents/upload`
 
-上传制度 / 范本文档。
+上传制度、范本或规则文档。
 
 ### `GET /api/base/documents`
 
@@ -117,7 +117,7 @@ Form fields:
 
 ### `GET /api/base/documents/{doc_id}/clauses`
 
-获取文档条款。
+获取制度文档条款。
 
 ### `GET /api/base/rules`
 
@@ -143,7 +143,7 @@ Form fields:
 
 查看制度审查报告。
 
-## Logs
+## 日志
 
 ### `POST /api/logs/frontend`
 

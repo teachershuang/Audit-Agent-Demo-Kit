@@ -1,11 +1,23 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$python = "C:\Users\26423\.conda\envs\contract_audit_base\python.exe"
 
-if (-not (Test-Path $python)) {
-  throw "Conda environment contract_audit_base was not found at $python"
+function Resolve-PythonCommand {
+  if ($env:PYTHON_EXECUTABLE) {
+    return $env:PYTHON_EXECUTABLE
+  }
+  $python = Get-Command python -ErrorAction SilentlyContinue
+  if ($python) {
+    return $python.Source
+  }
+  $py = Get-Command py -ErrorAction SilentlyContinue
+  if ($py) {
+    return $py.Source
+  }
+  throw "Python was not found. Set PYTHON_EXECUTABLE or add python to PATH."
 }
+
+$python = Resolve-PythonCommand
 
 Push-Location (Join-Path $root "backend")
 try {

@@ -10,7 +10,7 @@ import httpx
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://192.168.3.7:8999")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8999")
     parser.add_argument("--input", default=str(Path(__file__).resolve().parents[2] / "docs" / "gorules-request.example.json"))
     parser.add_argument("--trace", action="store_true")
     args = parser.parse_args()

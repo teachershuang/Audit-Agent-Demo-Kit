@@ -18,8 +18,8 @@ export function DocumentUpload({ busy, uploadResult, onSubmit }: DocumentUploadP
     <div className="grid gap-4 xl:grid-cols-[1fr_1.15fr]">
       <DocumentUploadForm busy={busy} onSubmit={onSubmit} />
       <div className="glass-panel rounded-[28px] p-5">
-        <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">Ingestion Result</div>
-        <h3 className="mt-2 text-xl font-semibold text-white">入库结果</h3>
+        <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">入库结果</div>
+        <h3 className="mt-2 text-xl font-semibold text-white">文档入库回执</h3>
         {!uploadResult ? null : (
           <div className="mt-4 space-y-4 text-sm text-slate-200">
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
@@ -80,38 +80,68 @@ function DocumentUploadForm({
         });
       }}
     >
-      <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">Document Upload</div>
-      <h3 className="mt-2 text-xl font-semibold text-white">制度 / 范本上传</h3>
+      <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">制度与范本上传</div>
+      <h3 className="mt-2 text-xl font-semibold text-white">规则底座文档上传</h3>
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <label className="space-y-2 text-sm text-slate-200">
           <span>文件</span>
-          <input name="file" type="file" accept=".pdf,.docx" className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3" />
+          <input
+            name="file"
+            type="file"
+            accept=".pdf,.docx"
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          />
         </label>
         <label className="space-y-2 text-sm text-slate-200">
           <span>类型</span>
-          <select name="docType" defaultValue="policy" className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3">
-            <option value="policy">制度</option>
-            <option value="template">范本总册</option>
+          <select
+            name="docType"
+            defaultValue="policy"
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          >
+            <option value="policy">制度文件</option>
+            <option value="template">合同范本</option>
           </select>
         </label>
         <label className="space-y-2 text-sm text-slate-200">
           <span>版本</span>
-          <input name="version" defaultValue="v1" className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3" />
+          <input
+            name="version"
+            defaultValue="v1"
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          />
         </label>
         <label className="space-y-2 text-sm text-slate-200">
           <span>发布机构</span>
-          <input name="issuer" defaultValue="黑龙江省交通投资集团有限公司" className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3" />
+          <input
+            name="issuer"
+            defaultValue="示例制度中心"
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          />
         </label>
         <label className="space-y-2 text-sm text-slate-200">
           <span>分类</span>
-          <input name="category" placeholder="如：合同审核制度 / 合同标准模板" className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3" />
+          <input
+            name="category"
+            placeholder="如：合同审查制度 / 标准合同模板"
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          />
         </label>
         <label className="space-y-2 text-sm text-slate-200">
-          <span>生效日期戳</span>
-          <input name="effectiveTs" type="number" defaultValue={20250101} className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3" />
+          <span>生效日期</span>
+          <input
+            name="effectiveTs"
+            type="number"
+            defaultValue={20250101}
+            className="w-full rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-3"
+          />
         </label>
       </div>
-      <button type="submit" disabled={busy} className="mt-5 rounded-full border border-cyan-400/30 bg-cyan-400/12 px-5 py-2.5 text-sm font-medium text-cyan-50 disabled:opacity-50">
+      <button
+        type="submit"
+        disabled={busy}
+        className="mt-5 rounded-full border border-cyan-400/30 bg-cyan-400/12 px-5 py-2.5 text-sm font-medium text-cyan-50 disabled:opacity-50"
+      >
         {busy ? "上传中..." : "上传并入库"}
       </button>
     </form>

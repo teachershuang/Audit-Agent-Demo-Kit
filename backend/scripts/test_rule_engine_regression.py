@@ -67,7 +67,7 @@ def build_no_hit_payload(payload: dict) -> dict:
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--payload", default="docs/gorules-request.example.json")
-    parser.add_argument("--base-url", default="http://192.168.3.7:8999")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8999")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[2]
@@ -87,7 +87,7 @@ async def main() -> None:
     broken_settings = Settings(
         gorules_enabled=True,
         gorules_mode="remote_api",
-        gorules_base_url="http://192.168.3.7:8998",
+        gorules_base_url="http://127.0.0.1:8998",
         gorules_decision_path="/validate",
         gorules_trace_enabled=False,
     )

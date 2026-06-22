@@ -1,33 +1,33 @@
-# Contributing
+# 贡献指南
 
 欢迎通过 Issue、Discussion 和 Pull Request 参与改进。
 
-## Suggested Workflow
+## 推荐流程
 
 1. Fork 仓库
 2. 新建分支
-3. 提交修改
+3. 完成修改
 4. 补充必要的截图、日志或复现步骤
 5. 发起 Pull Request
 
-## Development Notes
+## 开发约定
 
 - 后端默认端口：`8010`
 - 前端默认端口：`5173`
 - 运行日志目录：`.run-logs/`
 - 上传缓存目录：`backend/uploads/`
 
-## Before Submitting
+## 提交前检查
 
-请至少执行：
+至少执行以下命令：
 
 ```powershell
-C:\Users\26423\.conda\envs\contract_audit_base\python.exe -m compileall backend/app
+python -m compileall backend/app
 cd frontend
 npm run build
 ```
 
-## PR Expectations
+## Pull Request 说明要求
 
 - 说明改动目的
 - 说明影响范围

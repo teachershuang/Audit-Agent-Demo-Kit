@@ -4,12 +4,12 @@ from __future__ import annotations
 BUSINESS_RULES = [
     {
         "id": "RULE_001",
-        "name": "未匹配到有效集团范本",
+        "name": "未匹配到有效标准范本",
         "severity": "must_modify",
         "department": "business",
         "keywords": ["合同范本", "标准模板", "审核"],
         "logic": {"type": "template_required"},
-        "suggestion_template": "请选择并套用集团当前有效合同范本。",
+        "suggestion_template": "请为当前合同选择并套用有效标准范本。",
     },
     {
         "id": "RULE_002",
@@ -18,7 +18,7 @@ BUSINESS_RULES = [
         "department": "business",
         "keywords": ["适用范围", "合同类型"],
         "logic": {"type": "template_category_match"},
-        "suggestion_template": "请改用与合同类型一致的集团范本。",
+        "suggestion_template": "请改用与合同类型一致的标准范本。",
     },
     {
         "id": "RULE_006",
@@ -27,7 +27,7 @@ BUSINESS_RULES = [
         "department": "business",
         "keywords": ["标的", "内容"],
         "logic": {"type": "schema_required", "field": "contract_subject"},
-        "suggestion_template": "请补充明确的合同标的或服务/采购内容。",
+        "suggestion_template": "请补充明确的合同标的或服务 / 采购内容。",
     },
     {
         "id": "RULE_007",
@@ -40,7 +40,7 @@ BUSINESS_RULES = [
     },
     {
         "id": "RULE_008",
-        "name": "缺少数量/质量/规格",
+        "name": "缺少数量 / 质量 / 规格",
         "severity": "suggest_modify",
         "department": "business",
         "keywords": ["数量", "质量", "规格"],

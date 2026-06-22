@@ -1,21 +1,21 @@
-# Quick Start
+# 快速启动
 
-## Prerequisites
+## 环境要求
 
 - Python 3.11
 - Node.js 20+
 - npm 10+
-- Optional: Redis
-- Optional: internal Paddle OCR service
+- 可选：Redis
+- 可选：内网 OCR 服务
 
-## 1. Clone
+## 1. 克隆仓库
 
 ```powershell
 git clone https://github.com/teachershuang/Audit-Agent-Demo-Kit.git
 cd Audit-Agent-Demo-Kit
 ```
 
-## 2. Python Environment
+## 2. 准备 Python 环境
 
 ```powershell
 conda create -n contract_audit_base python=3.11 -y
@@ -23,7 +23,7 @@ conda activate contract_audit_base
 pip install -r .\backend\requirements.txt
 ```
 
-## 3. Frontend Dependencies
+## 3. 安装前端依赖
 
 ```powershell
 cd .\frontend
@@ -31,7 +31,7 @@ npm install
 cd ..
 ```
 
-## 4. Configure `.env`
+## 4. 配置 `.env`
 
 ```powershell
 Copy-Item .env.example .env
@@ -54,51 +54,51 @@ LLM_MODEL=deepseek-v4-flash
 
 ```env
 INTERNAL_QWEN_API_KEY=
-INTERNAL_QWEN_BASE_URL=http://192.168.8.29:4000/v1
+INTERNAL_QWEN_BASE_URL=http://your-internal-llm-host:4000/v1
 INTERNAL_QWEN_MODEL_NAME=Qwen3.6-35B-A3B-GGUF
 
 INTERNAL_PADDLE_SERVICE_MODE=remote_first
-INTERNAL_PADDLE_REMOTE_BASE_URL=http://192.168.8.29:8866
+INTERNAL_PADDLE_REMOTE_BASE_URL=http://your-internal-ocr-host:8866
 ```
 
-## 5. Start Services
+## 5. 启动服务
 
-### One Command
+### 一键启动
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_all.ps1
 ```
 
-### Start Separately
+### 分别启动
 
-Backend:
+后端：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_backend.ps1
 ```
 
-Frontend:
+前端：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_frontend.ps1
 ```
 
-## 6. Open the App
+## 6. 打开应用
 
-- Frontend: `http://127.0.0.1:5173`
-- Backend: `http://127.0.0.1:8010`
+- 前端：`http://127.0.0.1:5173`
+- 后端：`http://127.0.0.1:8010`
 
-## 7. Verify Build
+## 7. 验证构建
 
 ```powershell
-C:\Users\26423\.conda\envs\contract_audit_base\python.exe -m compileall backend/app
+python -m compileall backend/app
 cd frontend
 npm run build
 ```
 
-## Common Notes
+## 常见说明
 
-- `frontend/node_modules` 和 `frontend/dist` 默认不提交。
+- `frontend/node_modules` 与 `frontend/dist` 默认不提交。
 - 运行日志会落到 `.\.run-logs\`。
 - 上传文件会写入 `backend/uploads/`，该目录默认已忽略。
-- 如果前端无法连接后端，优先检查 `VITE_API_BASE_URL` 和 `8010` 端口。
+- 如果前端无法连接后端，优先检查 `VITE_API_BASE_URL` 与 `8010` 端口。
