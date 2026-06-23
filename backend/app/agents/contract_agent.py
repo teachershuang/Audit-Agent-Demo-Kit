@@ -112,14 +112,35 @@ class ContractAgent:
         clauses = await self.parser_agent.identify_clauses(extracted.pages, sections, relations)
         self._emit_progress(progress_callback, 82, "clause_tagging", f"已识别 {len(clauses)} 条关键条款。")
 
+        section_debug = getattr(self.parser_agent, "last_section_debug", {}) or {}
+        section_merge_error = section_debug.get("mergeError")
         agent_steps.append(
             self._step(
                 "step_004",
-                "章节结构识别",
+                "章节候选识别",
                 AgentStepStatus.SUCCESS,
-                720,
+                360,
                 f"{len(extracted.pages)} pages",
-                f"识别出 {len(sections)} 个章节",
+                f"生成 {section_debug.get('candidateCount', len(sections))} 个候选，覆盖 {section_debug.get('windowCount', 0)} 个窗口",
+                "qwen_service",
+            )
+        )
+        agent_steps.append(
+            self._step(
+                "step_004b",
+                "章节全局合并",
+                AgentStepStatus.WARNING if section_merge_error else AgentStepStatus.SUCCESS,
+                360,
+                f"{section_debug.get('candidateCount', len(sections))} candidates",
+                (
+                    f"合并为 {len(sections)} 个最终章节"
+                    if section_debug.get("usedMergeModel", True)
+                    else (
+                        f"合并模型未返回可用结果，已用候选章节降级输出 {len(sections)} 个章节；{section_merge_error}"
+                        if section_merge_error
+                        else f"未触发合并模型，直接输出 {len(sections)} 个章节"
+                    )
+                ),
                 "qwen_service",
             )
         )

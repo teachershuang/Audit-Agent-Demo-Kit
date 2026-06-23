@@ -55,6 +55,7 @@ class ContractParserAgent:
     def __init__(self, qwen_service: QwenService, settings: Settings) -> None:
         self.qwen_service = qwen_service
         self.settings = settings
+        self.last_section_debug: dict[str, Any] = {}
 
     @property
     def parallelism(self) -> int:
@@ -86,8 +87,24 @@ class ContractParserAgent:
             flattened.extend(batch)
 
         stage_one_candidates = self._dedupe_section_candidates(flattened, pages)
-        merged_items = await self._request_section_merge(stage_one_candidates, pages) if stage_one_candidates else []
+        merge_error = ""
+        if stage_one_candidates:
+            try:
+                merged_items = await self._request_section_merge(stage_one_candidates, pages)
+            except Exception as exc:
+                merge_error = str(exc)
+                merged_items = []
+        else:
+            merged_items = []
         sections = self._build_sections_from_items(merged_items or stage_one_candidates, pages)
+        self.last_section_debug = {
+            "windowCount": len(windows),
+            "candidateCount": len(stage_one_candidates),
+            "mergedCount": len(merged_items),
+            "finalCount": len(sections),
+            "usedMergeModel": bool(merged_items),
+            "mergeError": merge_error,
+        }
         if sections:
             return sections
         return self._derive_sections_locally(pages)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import json
 import re
@@ -121,13 +122,18 @@ class QwenService:
         started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                response = await client.post(
-                    f"{self.settings.qwen_base_url.rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json=payload,
+                response = await asyncio.wait_for(
+                    client.post(
+                        f"{self.settings.qwen_base_url.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    ),
+                    timeout=timeout + 5,
                 )
                 if response.is_error:
                     raise RuntimeError(f"Qwen API error {response.status_code}: {response.text}")
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"Qwen request exceeded total timeout after {timeout} seconds.") from exc
         except httpx.ReadTimeout as exc:
             raise RuntimeError(f"Qwen request timed out after {timeout} seconds.") from exc
         except httpx.HTTPError as exc:
