@@ -15,8 +15,24 @@
 ```mermaid
 flowchart TD
     A["上传合同"] --> B["文档服务"]
-    B --> C["OCR 与文本块提取"]
-    C --> D["合同解析 Agent"]
+    B --> C{"运行时模型档位"}
+
+    subgraph Cloud["公网链路"]
+        C -->|公网模式| C1["Qwen VL / 云端 OCR"]
+        C1 --> C2["页面文本块提取"]
+        C2 --> C3["阶段一：章节候选识别"]
+        C3 --> C4["阶段二：章节全局合并"]
+    end
+
+    subgraph Local["本地 / 内网链路"]
+        C -->|内网模式| L1["Paddle OCR / 本地多模态增强（可选）"]
+        L1 --> L2["页面文本块 + bbox 提取"]
+        L2 --> L3["阶段一：章节候选识别"]
+        L3 --> L4["阶段二：章节全局合并"]
+    end
+
+    C4 --> D["合同解析 Agent"]
+    L4 --> D
     D --> E["证据定位服务"]
     D --> F["审计关注点 Agent"]
     D --> G["校验 Agent"]
@@ -42,6 +58,7 @@ flowchart TD
   - 调度 OCR、结构理解、字段抽取、证据定位与审计生成
 - `ContractParserAgent`
   - 负责章节还原、条款识别、关键字段抽取
+  - 章节还原采用两阶段：先识别候选标题与 blockIds，再做全局去重和顺序合并
   - 支持拆批并行与上下文压缩
 - `AuditFocusAgent`
   - 结合条款结果、审计配置与规则结果生成审计关注点
@@ -101,12 +118,14 @@ flowchart TD
 - 文本模型：`deepseek-v4-flash`
 - 多模态模型：`qwen-vl-plus`
 - OCR 策略：`vl_primary`
+- 章节链路：云端多模态 / OCR -> 候选识别 -> 全局合并
 
 ### 内网模式
 
 - 文本模型：`Qwen3.6-35B-A3B-GGUF`
 - 多模态模型：无
 - OCR 策略：`paddle_primary`
+- 章节链路：本地 OCR / 页块坐标，必要时叠加本地多模态增强 -> 候选识别 -> 全局合并
 
 ## 证据定位策略
 

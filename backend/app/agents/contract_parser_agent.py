@@ -12,7 +12,8 @@ from app.prompts.contract import (
     build_key_fact_prompt,
     build_overview_text_prompt,
     build_overview_vl_prompt,
-    build_section_semantic_prompt,
+    build_section_candidate_prompt,
+    build_section_merge_prompt,
 )
 from app.schemas.contract import ClauseTag, ContractPage, ContractSection, KeyFact
 from app.schemas.relation import AuditConfigType, RelationConfig
@@ -77,14 +78,16 @@ class ContractParserAgent:
 
     async def reconstruct_sections(self, pages: list[ContractPage]) -> list[ContractSection]:
         windows = self._build_page_windows(pages, self.section_batch_size, self.batch_overlap)
-        tasks = [self._request_section_batch(window) for window in windows]
+        tasks = [self._request_section_candidate_batch(window) for window in windows]
         raw_batches = await self._gather_limited(tasks, min(self.parallelism, max(1, len(tasks)))) if tasks else []
 
         flattened: list[dict[str, Any]] = []
         for batch in raw_batches:
             flattened.extend(batch)
 
-        sections = self._build_sections_from_items(flattened, pages)
+        stage_one_candidates = self._dedupe_section_candidates(flattened, pages)
+        merged_items = await self._request_section_merge(stage_one_candidates, pages) if stage_one_candidates else []
+        sections = self._build_sections_from_items(merged_items or stage_one_candidates, pages)
         if sections:
             return sections
         return self._derive_sections_locally(pages)
@@ -143,15 +146,63 @@ class ContractParserAgent:
         self._ensure_required_overview_facts(merged)
         return self._dedupe_key_facts(merged)
 
-    async def _request_section_batch(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
-        prompt = build_section_semantic_prompt(self._pages_payload(pages, mode="section"))
+    async def _request_section_candidate_batch(self, pages: list[ContractPage]) -> list[dict[str, Any]]:
+        prompt = build_section_candidate_prompt(self._pages_payload(pages, mode="section"))
         payload = await self.qwen_service.chat_json(
             system_prompt=prompt.system,
             user_prompt=prompt.user,
             schema={"type": "object"},
             timeout=90,
         )
-        return self._pick_first_array(payload, ["sections", "chapterTree", "chapter_tree"])
+        return self._pick_first_array(payload, ["sectionCandidates", "sections", "chapterCandidates"])
+
+    async def _request_section_merge(
+        self,
+        candidates: list[dict[str, Any]],
+        pages: list[ContractPage],
+    ) -> list[dict[str, Any]]:
+        prompt = build_section_merge_prompt(
+            candidate_payload=[
+                {
+                    "title": self._clean(item.get("title") or item.get("heading") or item.get("name")),
+                    "level": self._coerce_level(item.get("level")),
+                    "page": self._coerce_page(item.get("page"), pages, self._clean(item.get("evidenceText") or item.get("title"))),
+                    "sortOrder": self._coerce_sort_order(item.get("sortOrder"), index),
+                    "sectionCode": self._clean(item.get("sectionCode")) or self._extract_section_code(self._clean(item.get("title"))),
+                    "sectionPath": self._clean(item.get("sectionPath")) or None,
+                    "summary": self._compact_summary(self._clean(item.get("summary")) or self._clean(item.get("evidenceText")), 80),
+                    "confidence": self._clamp_confidence(item.get("confidence")),
+                    "evidenceText": self._compact_summary(self._clean(item.get("evidenceText") or item.get("summary") or item.get("title")), 120),
+                    "supportingBlockIds": self._normalize_reference_list(
+                        item.get("supportingBlockIds") or item.get("blockIds") or item.get("evidenceBlockIds")
+                    ),
+                }
+                for index, item in enumerate(candidates[:240], start=1)
+                if self._clean(item.get("title") or item.get("heading") or item.get("name"))
+            ],
+            page_outline_payload=[
+                {
+                    "page": page.page,
+                    "title": page.title,
+                    "headingCandidates": [
+                        {
+                            "blockId": block.id,
+                            "text": self._clean(block.text)[:120],
+                        }
+                        for block in page.blocks[:40]
+                        if self._looks_like_heading(block.text)
+                    ][:12],
+                }
+                for page in pages
+            ],
+        )
+        payload = await self.qwen_service.chat_json(
+            system_prompt=prompt.system,
+            user_prompt=prompt.user,
+            schema={"type": "object"},
+            timeout=90,
+        )
+        return self._pick_first_array(payload, ["sections", "mergedSections", "chapterTree"])
 
     async def _request_clause_batch(
         self,
@@ -288,6 +339,9 @@ class ContractParserAgent:
                 continue
             evidence_text = self._clean(item.get("evidenceText") or item.get("snippet") or title)
             page = self._coerce_page(item.get("page"), pages, evidence_text)
+            block_ids = self._normalize_reference_list(
+                item.get("blockIds") or item.get("supportingBlockIds") or item.get("evidenceBlockIds")
+            )
             key = (page, title)
             candidate = ContractSection(
                 id=f"section_{index:03d}",
@@ -296,14 +350,18 @@ class ContractParserAgent:
                 page=page,
                 summary=self._compact_summary(self._clean(item.get("summary")) or evidence_text or title, 80),
                 confidence=self._clamp_confidence(item.get("confidence")),
-                sortOrder=index,
+                sortOrder=self._coerce_sort_order(item.get("sortOrder"), index),
                 sectionCode=self._clean(item.get("sectionCode")) or self._extract_section_code(title),
                 sectionPath=self._clean(item.get("sectionPath")) or None,
-                blockIds=[],
+                blockIds=block_ids,
                 evidenceId=None,
             )
             current = best_by_key.get(key)
-            if current is None or (candidate.confidence, len(candidate.summary)) > (current.confidence, len(current.summary)):
+            if current is None or (candidate.confidence, len(candidate.blockIds), len(candidate.summary)) > (
+                current.confidence,
+                len(current.blockIds),
+                len(current.summary),
+            ):
                 best_by_key[key] = candidate
 
         sections = list(best_by_key.values())
@@ -506,25 +564,50 @@ class ContractParserAgent:
     @staticmethod
     def _pages_payload(pages: list[ContractPage], mode: str) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
-        block_limit = 16 if mode == "section" else 20
-        page_text_limit = 1800 if mode == "section" else 2200
+        block_limit = 24 if mode == "section" else 20
+        page_text_limit = 2400 if mode == "section" else 2200
         for page in pages:
             selected_blocks = []
             heading_candidates = []
-            for block in page.blocks:
+            for order, block in enumerate(page.blocks, start=1):
                 cleaned = ContractParserAgent._clean(block.text)
                 if not cleaned:
                     continue
                 if ContractParserAgent._looks_like_heading(cleaned):
-                    heading_candidates.append(cleaned[:120])
+                    heading_candidates.append(
+                        {
+                            "blockId": block.id,
+                            "order": order,
+                            "text": cleaned[:120],
+                            "bbox": [block.x, block.y, block.width, block.height],
+                        }
+                    )
                 if len(selected_blocks) < block_limit:
-                    selected_blocks.append(cleaned[:160])
+                    if mode == "section":
+                        selected_blocks.append(
+                            {
+                                "id": block.id,
+                                "order": order,
+                                "text": cleaned[:160],
+                                "x": block.x,
+                                "y": block.y,
+                                "width": block.width,
+                                "height": block.height,
+                                "headingLike": ContractParserAgent._looks_like_heading(cleaned),
+                                "emphasis": block.emphasis,
+                            }
+                        )
+                    else:
+                        selected_blocks.append(cleaned[:160])
             payload.append(
                 {
                     "page": page.page,
                     "title": page.title,
-                    "headingCandidates": heading_candidates[:10],
-                    "pageText": " ".join(selected_blocks)[:page_text_limit],
+                    "headingCandidates": heading_candidates[:12],
+                    "pageText": " ".join(
+                        block["text"] if isinstance(block, dict) else str(block)
+                        for block in selected_blocks
+                    )[:page_text_limit],
                     "blocks": selected_blocks,
                 }
             )
@@ -694,6 +777,14 @@ class ContractParserAgent:
         except Exception:
             level = 1
         return max(1, min(level, 6))
+
+    @staticmethod
+    def _coerce_sort_order(value: Any, fallback: int) -> int:
+        try:
+            order = int(value)
+        except Exception:
+            order = fallback
+        return max(1, order)
 
     @staticmethod
     def _coerce_page(value: Any, pages: list[ContractPage], fallback_text: str) -> int:
@@ -972,6 +1063,51 @@ class ContractParserAgent:
             seen.add(cleaned)
             normalized.append(cleaned)
         return normalized[:8]
+
+    def _dedupe_section_candidates(
+        self,
+        items: list[dict[str, Any]],
+        pages: list[ContractPage],
+    ) -> list[dict[str, Any]]:
+        best_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+        for index, item in enumerate(items, start=1):
+            title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
+            if not title:
+                continue
+            evidence_text = self._clean(item.get("evidenceText") or item.get("summary") or title)
+            page = self._coerce_page(item.get("page"), pages, evidence_text)
+            key = (page, title)
+            normalized_item = {
+                "title": title[:120],
+                "level": self._coerce_level(item.get("level")),
+                "page": page,
+                "sortOrder": self._coerce_sort_order(item.get("sortOrder"), index),
+                "sectionCode": self._clean(item.get("sectionCode")) or self._extract_section_code(title),
+                "sectionPath": self._clean(item.get("sectionPath")) or None,
+                "summary": self._compact_summary(self._clean(item.get("summary")) or evidence_text or title, 80),
+                "confidence": self._clamp_confidence(item.get("confidence")),
+                "evidenceText": self._compact_summary(evidence_text or title, 120),
+                "supportingBlockIds": self._normalize_reference_list(
+                    item.get("supportingBlockIds") or item.get("blockIds") or item.get("evidenceBlockIds")
+                ),
+            }
+            current = best_by_key.get(key)
+            if current is None or (
+                normalized_item["confidence"],
+                len(normalized_item["supportingBlockIds"]),
+                len(normalized_item["summary"]),
+            ) > (
+                current["confidence"],
+                len(current["supportingBlockIds"]),
+                len(current["summary"]),
+            ):
+                best_by_key[key] = normalized_item
+
+        deduped = list(best_by_key.values())
+        deduped.sort(key=lambda item: (item["page"], item["sortOrder"], item["level"], item["title"]))
+        for index, item in enumerate(deduped, start=1):
+            item["sortOrder"] = index
+        return deduped
 
     @staticmethod
     def _normalize_structured_fields(value: Any) -> dict[str, Any]:

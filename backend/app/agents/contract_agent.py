@@ -104,9 +104,9 @@ class ContractAgent:
             )
         )
 
-        self._emit_progress(progress_callback, 60, "section_reconstruction", "正在根据 OCR blocks 重建合同章节结构。")
+        self._emit_progress(progress_callback, 60, "section_reconstruction", "正在执行章节重构阶段一：识别章节候选与标题锚点。")
         sections = await self.parser_agent.reconstruct_sections(extracted.pages)
-        self._emit_progress(progress_callback, 72, "section_reconstruction", f"已识别 {len(sections)} 个章节。")
+        self._emit_progress(progress_callback, 72, "section_reconstruction", f"已完成章节重构阶段二：全局合并，识别 {len(sections)} 个章节。")
 
         self._emit_progress(progress_callback, 76, "clause_tagging", "正在识别关键条款并生成结构化条款结果。")
         clauses = await self.parser_agent.identify_clauses(extracted.pages, sections, relations)

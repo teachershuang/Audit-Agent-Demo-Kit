@@ -10,6 +10,34 @@ def _dump(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def build_section_candidate_prompt(page_payload: list[dict[str, Any]]) -> PromptBundle:
+    return PromptBundle(
+        system=(
+            "你是中文合同章节候选识别专家。\n"
+            "你的任务不是直接生成最终章节树，而是先从分页文本块中识别可靠的章节候选。\n"
+            "必须严格遵守原始阅读顺序，优先使用 block_id 作为证据锚点。\n"
+            "如果某个标题跨行或依赖多个连续文本块，可以返回多个 supportingBlockIds。\n"
+            "不要编造不存在的标题；如果只是普通正文，不要误判为章节标题。\n"
+            "输出必须是中文 JSON。"
+        ),
+        user=(
+            f"合同分页与文本块如下：\n{_dump(page_payload)}\n\n"
+            "请返回一个 JSON 对象，顶层字段为 `sectionCandidates`。\n"
+            "每个 candidate 包含：\n"
+            "- title: 候选章节标题\n"
+            "- level: 层级，1 到 6\n"
+            "- page: 所在页码\n"
+            "- sortOrder: 在当前输入片段中的自然顺序，从 1 开始\n"
+            "- sectionCode: 序号文本，例如“第一条”“一、”“（一）”\n"
+            "- sectionPath: 上级路径摘要，例如“第一条 > （一）”\n"
+            "- summary: 60 字以内摘要\n"
+            "- confidence: 0 到 1\n"
+            "- evidenceText: 对应原文短摘录\n"
+            "- supportingBlockIds: 支撑该标题判断的 block_id 数组，按阅读顺序返回"
+        ),
+    )
+
+
 def build_section_semantic_prompt(page_payload: list[dict[str, Any]]) -> PromptBundle:
     return PromptBundle(
         system=(
@@ -33,6 +61,38 @@ def build_section_semantic_prompt(page_payload: list[dict[str, Any]]) -> PromptB
             "- summary: 60 字以内摘要\n"
             "- confidence: 0 到 1\n"
             "- evidenceText: 与该标题对应的原文短摘录"
+        ),
+    )
+
+
+def build_section_merge_prompt(
+    candidate_payload: list[dict[str, Any]],
+    page_outline_payload: list[dict[str, Any]],
+) -> PromptBundle:
+    return PromptBundle(
+        system=(
+            "你是中文合同章节全局合并专家。\n"
+            "你将收到多个分页窗口识别出的章节候选，需要去重、纠正顺序、处理跨页延续，并输出最终章节树。\n"
+            "必须严格保持合同自然顺序，不能按标题字面重新排序。\n"
+            "相邻窗口可能重复识别同一标题，请合并并保留更可靠的 supportingBlockIds。\n"
+            "如果同一章节跨页延续，允许保留起始页作为 page，并在 blockIds 中保留多个 block_id。\n"
+            "输出必须是中文 JSON。"
+        ),
+        user=(
+            f"分页轮廓：\n{_dump(page_outline_payload)}\n\n"
+            f"章节候选：\n{_dump(candidate_payload)}\n\n"
+            "请返回一个 JSON 对象，顶层字段为 `sections`。\n"
+            "每个 section 包含：\n"
+            "- title: 最终章节标题\n"
+            "- level: 层级，1 到 6\n"
+            "- page: 章节起始页码\n"
+            "- sortOrder: 全局自然顺序，从 1 开始\n"
+            "- sectionCode: 序号文本\n"
+            "- sectionPath: 上级路径摘要\n"
+            "- summary: 60 字以内摘要\n"
+            "- confidence: 0 到 1\n"
+            "- evidenceText: 短摘录\n"
+            "- blockIds: 支撑该章节的 block_id 数组，按阅读顺序返回"
         ),
     )
 
