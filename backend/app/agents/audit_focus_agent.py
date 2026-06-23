@@ -32,7 +32,7 @@ class AuditFocusAgent:
         groups = self._build_groups(clauses=clauses, relations=non_rule_relations, key_facts=key_facts)
         payloads = await asyncio.gather(
             *[
-                self._request_focus_batch(
+                self._safe_request_focus_batch(
                     sections=sections,
                     clauses=group["clauses"],
                     relations=group["relations"],
@@ -188,6 +188,23 @@ class AuditFocusAgent:
             schema={"type": "object"},
             timeout=120,
         )
+
+    async def _safe_request_focus_batch(
+        self,
+        sections: list[ContractSection],
+        clauses: list[ClauseTag],
+        relations: list[RelationConfig],
+        key_facts: list[KeyFact],
+        focus_hint: str,
+    ) -> dict[str, Any]:
+        try:
+            return await self._request_focus_batch(sections, clauses, relations, key_facts, focus_hint)
+        except Exception:
+            compact_clauses = clauses[: max(3, min(6, len(clauses)))]
+            try:
+                return await self._request_focus_batch(sections[:20], compact_clauses, relations[:8], key_facts[:12], focus_hint)
+            except Exception:
+                return {"auditFocuses": []}
 
     @staticmethod
     def _build_groups(

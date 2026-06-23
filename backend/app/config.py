@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     paddle_remote_timeout_seconds: int = 8
     scanned_vl_concurrency: int = 6
     qwen_parallel_requests: int = 10
-    section_batch_size: int = 4
+    section_batch_size: int = 2
     section_batch_overlap: int = 1
     clause_batch_size: int = 4
     key_fact_batch_size: int = 6
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     internal_paddle_remote_health_path: str = "/health"
     internal_scanned_ocr_strategy: str = "paddle_primary"
     internal_enable_vl_ocr_enhancement: bool = False
-    internal_qwen_parallel_requests: int = 8
+    internal_qwen_parallel_requests: int = 2
 
     embedding_api_key: str = ""
     embedding_base_url: str = ""

@@ -50,6 +50,24 @@ HEADING_PATTERNS = (
     r"^[（(][一二三四五六七八九十\d]+[)）]",
 )
 
+SECTION_TITLE_BLOCKLIST = (
+    "合同编号",
+    "填写说明",
+    "技术服务合同",
+    "合同类别",
+    "合同交易额",
+    "技术交易额",
+    "申请登记人",
+    "登记法人",
+    "登记材料",
+    "法定代表人",
+    "项目联系人",
+    "通讯地址",
+    "开户银行",
+    "户名",
+    "帐号",
+)
+
 
 class ContractParserAgent:
     def __init__(self, qwen_service: QwenService, settings: Settings) -> None:
@@ -85,12 +103,16 @@ class ContractParserAgent:
         flattened: list[dict[str, Any]] = []
         for batch in raw_batches:
             flattened.extend(batch)
+        flattened.extend(self._extract_structural_section_candidates(pages))
 
         stage_one_candidates = self._dedupe_section_candidates(flattened, pages)
         merge_error = ""
         if stage_one_candidates:
             try:
-                merged_items = await self._request_section_merge(stage_one_candidates, pages)
+                merged_items = await self._request_section_merge_with_retry(stage_one_candidates, pages)
+                if not self._is_section_merge_acceptable(merged_items, stage_one_candidates):
+                    merge_error = "section merge rejected by quality gate: major section count collapsed"
+                    merged_items = []
             except Exception as exc:
                 merge_error = str(exc)
                 merged_items = []
@@ -110,6 +132,27 @@ class ContractParserAgent:
         if self.settings.strict_model_outputs:
             raise RuntimeError("Section reconstruction returned no model sections in strict model output mode.")
         return self._derive_sections_locally(pages)
+
+    def _is_section_merge_acceptable(self, merged_items: list[dict[str, Any]], candidate_items: list[dict[str, Any]]) -> bool:
+        if not merged_items:
+            return False
+
+        def major_count(items: list[dict[str, Any]]) -> int:
+            count = 0
+            for item in items:
+                title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
+                code = self._normalize_section_code(self._clean(item.get("sectionCode")) or self._extract_section_code(title))
+                if code and code.startswith("第"):
+                    count += 1
+            return count
+
+        candidate_major = major_count(candidate_items)
+        merged_major = major_count(merged_items)
+        if candidate_major >= 6 and merged_major < max(5, int(candidate_major * 0.55)):
+            return False
+        if len(merged_items) > max(len(candidate_items) * 2, len(candidate_items) + 20):
+            return False
+        return True
 
     async def identify_clauses(
         self,
@@ -228,6 +271,28 @@ class ContractParserAgent:
             timeout=90,
         )
         return self._pick_first_array(payload, ["sections", "mergedSections", "chapterTree"])
+
+    async def _request_section_merge_with_retry(
+        self,
+        candidates: list[dict[str, Any]],
+        pages: list[ContractPage],
+    ) -> list[dict[str, Any]]:
+        try:
+            return await self._request_section_merge(candidates, pages)
+        except Exception as first_error:
+            chunk_size = 24
+            chunks = self._chunk_items(candidates, chunk_size)
+            merged_chunks = await self._gather_limited(
+                [self._request_section_merge(chunk, pages) for chunk in chunks],
+                min(2, max(1, len(chunks))),
+            )
+            flattened: list[dict[str, Any]] = []
+            for chunk in merged_chunks:
+                if isinstance(chunk, list):
+                    flattened.extend(item for item in chunk if isinstance(item, dict))
+            if flattened:
+                return flattened
+            raise first_error
 
     async def _request_clause_batch(
         self,
@@ -360,14 +425,15 @@ class ContractParserAgent:
 
         for index, item in enumerate(items, start=1):
             title = self._clean(item.get("title") or item.get("heading") or item.get("name"))
-            if not title:
+            if not title or not self._is_valid_section_title(title):
                 continue
             evidence_text = self._clean(item.get("evidenceText") or item.get("snippet") or title)
             page = self._coerce_page(item.get("page"), pages, evidence_text)
             block_ids = self._normalize_reference_list(
                 item.get("blockIds") or item.get("supportingBlockIds") or item.get("evidenceBlockIds")
             )
-            key = (page, title)
+            normalized_code = self._normalize_section_code(self._clean(item.get("sectionCode")) or self._extract_section_code(title))
+            key = (0, normalized_code) if normalized_code and normalized_code.startswith("第") else (page, title)
             candidate = ContractSection(
                 id=f"section_{index:03d}",
                 title=title[:120],
@@ -376,7 +442,7 @@ class ContractParserAgent:
                 summary=self._compact_summary(self._clean(item.get("summary")) or evidence_text or title, 80),
                 confidence=self._clamp_confidence(item.get("confidence")),
                 sortOrder=self._coerce_sort_order(item.get("sortOrder"), index),
-                sectionCode=self._clean(item.get("sectionCode")) or self._extract_section_code(title),
+                sectionCode=normalized_code,
                 sectionPath=self._clean(item.get("sectionPath")) or None,
                 blockIds=block_ids,
                 evidenceId=None,
@@ -585,6 +651,41 @@ class ContractParserAgent:
                 seen.add(label)
                 requested.append({"label": label, "description": description})
         return requested
+
+    @staticmethod
+    def _extract_structural_section_candidates(pages: list[ContractPage]) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        article_pattern = re.compile(r"(第[一二三四五六七八九十百零〇\d]+条)[：:、]?")
+        for page in pages:
+            for block_order, block in enumerate(page.blocks, start=1):
+                text = ContractParserAgent._clean(block.text)
+                if not text:
+                    continue
+                for match in article_pattern.finditer(text):
+                    prefix = text[max(0, match.start() - 8) : match.start()]
+                    if any(marker in prefix for marker in ("本合同", "违反", "按照", "依照", "依据")):
+                        continue
+                    code = match.group(1)
+                    tail = text[match.end() : match.end() + 42]
+                    topic = re.split(r"[。；;\n]|第[一二三四五六七八九十百零〇\d]+条", tail)[0]
+                    topic = ContractParserAgent._compact_summary(topic.strip(" ：:，,、"), 24)
+                    title = f"{code} {topic}".strip() if topic else code
+                    candidates.append(
+                        {
+                            "title": title,
+                            "level": 1,
+                            "page": page.page,
+                            "sortOrder": len(candidates) + 1,
+                            "sectionCode": code,
+                            "sectionPath": None,
+                            "summary": topic or code,
+                            "confidence": 0.82,
+                            "evidenceText": ContractParserAgent._compact_summary(text[max(match.start() - 20, 0) : match.end() + 80], 120),
+                            "supportingBlockIds": [block.id],
+                            "source": "ocr_heading_candidate",
+                        }
+                    )
+        return candidates[:180]
 
     @staticmethod
     def _pages_payload(pages: list[ContractPage], mode: str) -> list[dict[str, Any]]:
@@ -1101,13 +1202,14 @@ class ContractParserAgent:
                 continue
             evidence_text = self._clean(item.get("evidenceText") or item.get("summary") or title)
             page = self._coerce_page(item.get("page"), pages, evidence_text)
-            key = (page, title)
+            normalized_code = self._normalize_section_code(self._clean(item.get("sectionCode")) or self._extract_section_code(title))
+            key = (0, normalized_code) if normalized_code and normalized_code.startswith("第") else (page, title)
             normalized_item = {
                 "title": title[:120],
                 "level": self._coerce_level(item.get("level")),
                 "page": page,
                 "sortOrder": self._coerce_sort_order(item.get("sortOrder"), index),
-                "sectionCode": self._clean(item.get("sectionCode")) or self._extract_section_code(title),
+                "sectionCode": normalized_code,
                 "sectionPath": self._clean(item.get("sectionPath")) or None,
                 "summary": self._compact_summary(self._clean(item.get("summary")) or evidence_text or title, 80),
                 "confidence": self._clamp_confidence(item.get("confidence")),
@@ -1133,6 +1235,33 @@ class ContractParserAgent:
         for index, item in enumerate(deduped, start=1):
             item["sortOrder"] = index
         return deduped
+
+    @staticmethod
+    def _is_valid_section_title(title: str) -> bool:
+        compact = ContractParserAgent._clean(title).replace(" ", "")
+        if not compact or len(compact) > 80:
+            return False
+        if any(keyword in compact for keyword in SECTION_TITLE_BLOCKLIST):
+            return False
+        if compact.endswith(("：", ":")) and len(compact) <= 18:
+            return False
+        code = ContractParserAgent._extract_section_code(compact)
+        if not code:
+            return False
+        if re.match(r"^\d", code):
+            return False
+        if code.startswith(("（", "(")):
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_section_code(code: str | None) -> str | None:
+        cleaned = ContractParserAgent._clean(code)
+        if not cleaned:
+            return None
+        cleaned = re.sub(r"\s+", "", cleaned)
+        cleaned = cleaned.replace("：", "").replace(":", "")
+        return cleaned[:24]
 
     @staticmethod
     def _normalize_structured_fields(value: Any) -> dict[str, Any]:

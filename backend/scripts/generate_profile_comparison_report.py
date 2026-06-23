@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
+import os
+import subprocess
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -104,6 +107,36 @@ def load_task_file(task_id: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
+    except Exception:
+        return "unknown"
+
+
+def env_value(name: str, default: str = "unknown") -> str:
+    if os.getenv(name):
+        return str(os.getenv(name))
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return default
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() == name:
+            return value.strip()
+    return default
+
+
 def run_profile(
     client: httpx.Client,
     contract_path: Path,
@@ -123,6 +156,39 @@ def run_profile(
         task_payload=task_payload,
         result_payload=result_payload,
         elapsed_ms=(result_payload.get("task") or {}).get("elapsedMs") or 0,
+        runtime_snapshot=runtime_snapshot,
+    )
+
+
+def load_profile_run_from_task(task_id: str, profile_id: str) -> ProfileRun:
+    task_payload = load_task_file(task_id)
+    result_payload = task_payload.get("result")
+    if not isinstance(result_payload, dict):
+        raise ValueError(f"Task {task_id} has no persisted result.")
+    task = result_payload.get("task") or task_payload.get("task") or {}
+    model_name = task.get("modelName") or profile_id
+    runtime_snapshot = {
+        "currentProfileId": profile_id,
+        "currentProfileLabel": profile_id,
+        "profiles": [
+            {
+                "id": profile_id,
+                "label": profile_id,
+                "textModel": model_name,
+                "visionModel": "qwen-vl-plus" if profile_id == "public" else None,
+                "reviewModel": model_name,
+                "ocrStrategy": "paddle_primary",
+                "enableVlOcrEnhancement": profile_id == "public",
+            }
+        ],
+    }
+    return ProfileRun(
+        profile_id=profile_id,
+        profile_label=profile_id,
+        task_id=task_id,
+        task_payload=task_payload,
+        result_payload=result_payload,
+        elapsed_ms=task.get("elapsedMs") or 0,
         runtime_snapshot=runtime_snapshot,
     )
 
@@ -180,13 +246,25 @@ def build_page_comparison(public_pages: list[dict[str, Any]], local_pages: list[
 
 
 def build_section_comparison(public_sections: list[dict[str, Any]], local_sections: list[dict[str, Any]]) -> dict[str, Any]:
-    public_titles = [f"{item.get('sectionCode') or ''} {item.get('title') or ''}".strip() for item in public_sections]
-    local_titles = [f"{item.get('sectionCode') or ''} {item.get('title') or ''}".strip() for item in local_sections]
+    def is_major(item: dict[str, Any]) -> bool:
+        code = str(item.get("sectionCode") or "")
+        if code.startswith(("（", "(")):
+            return False
+        return item.get("level") == 1 or code.startswith("第")
+
+    public_major = [item for item in public_sections if is_major(item)]
+    local_major = [item for item in local_sections if is_major(item)]
+    public_titles = [f"{item.get('sectionCode') or ''} {item.get('title') or ''}".strip() for item in public_major]
+    local_titles = [f"{item.get('sectionCode') or ''} {item.get('title') or ''}".strip() for item in local_major]
     public_set = set(public_titles)
     local_set = set(local_titles)
     return {
-        "public_count": len(public_sections),
-        "local_count": len(local_sections),
+        "public_count": len(public_major),
+        "local_count": len(local_major),
+        "public_total_count": len(public_sections),
+        "local_total_count": len(local_sections),
+        "public_child_count": max(len(public_sections) - len(public_major), 0),
+        "local_child_count": max(len(local_sections) - len(local_major), 0),
         "missing_in_local": [title for title in public_titles if title not in local_set][:20],
         "extra_in_local": [title for title in local_titles if title not in public_set][:20],
         "public_titles": public_titles,
@@ -337,6 +415,7 @@ def render_html(
     total_local_chars = sum(item["local_chars"] for item in page_comp)
     total_missing_in_local = sum(item["local_missing_vs_public"] for item in page_comp)
     preview_assets = load_pdf_page_images(contract_path)
+    manifest_path = output_path.with_suffix(".manifest.json")
 
     stage_cards = [
         {
@@ -346,8 +425,8 @@ def render_html(
         },
         {
             "name": "章节还原",
-            "public": f"{len(public_sections)} 个章节",
-            "local": f"{len(local_sections)} 个章节",
+            "public": f"{section_comp['public_count']} 个主条款 / {section_comp['public_child_count']} 个子项",
+            "local": f"{section_comp['local_count']} 个主条款 / {section_comp['local_child_count']} 个子项",
         },
         {
             "name": "条款标签",
@@ -426,8 +505,8 @@ def render_html(
     .title {{ font-size: 34px; font-weight: 800; margin: 0 0 6px; }}
     .subtitle {{ color: var(--muted); margin: 0 0 16px; line-height: 1.7; }}
     .meta, .cards {{ display: grid; gap: 14px; }}
-    .meta {{ grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }}
-    .cards {{ grid-template-columns: repeat(6, minmax(0, 1fr)); }}
+    .meta {{ grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 14px; }}
+    .cards {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
     .chip, .card {{
       background: rgba(255,255,255,0.03);
       border: 1px solid rgba(255,255,255,0.06);
@@ -484,6 +563,7 @@ def render_html(
         <div class="chip"><div class="k">测试文件</div><div class="v">{esc(contract_path.name)}</div></div>
         <div class="chip"><div class="k">生成时间</div><div class="v">{esc(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}</div></div>
         <div class="chip"><div class="k">报告路径</div><div class="v">{esc(str(output_path))}</div></div>
+        <div class="chip"><div class="k">Run Manifest</div><div class="v">{esc(str(manifest_path))}</div></div>
       </div>
       <div class="cards">
         {"".join(f'<div class="card"><div class="k">{esc(k)}</div><div class="v">{esc(v)}</div></div>' for k, v in top_summary_cards)}
@@ -514,6 +594,7 @@ def render_html(
           </div>
         </div>
         <p class="small">说明：本合同为扫描件，PDF 文本层为 0。报告不把 OCR 拆成公网/内网能力对比，而是把页面文本作为共同输入基线，再观察 VL 语义补充、文本模型理解和后续 Agent 节点的差异。</p>
+        <p class="small">运行口径：Git {esc(git_commit())}；temperature=0；章节候选窗口=2页；内网并发=2；严格模型输出={esc(env_value("STRICT_MODEL_OUTPUTS"))}。</p>
       </div>
       <div class="panel">
         <h2>二、原件预览</h2>
@@ -576,10 +657,10 @@ def render_html(
       <div class="panel">
         <h2>六、章节还原对比</h2>
         <div class="cards" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px;">
-          <div class="card"><div class="k">公网章节数</div><div class="v">{section_comp['public_count']}</div></div>
-          <div class="card"><div class="k">内网章节数</div><div class="v">{section_comp['local_count']}</div></div>
-          <div class="card"><div class="k">内网缺失章节</div><div class="v">{len(section_comp['missing_in_local'])}</div></div>
-          <div class="card"><div class="k">内网额外章节</div><div class="v">{len(section_comp['extra_in_local'])}</div></div>
+          <div class="card"><div class="k">公网主条款</div><div class="v">{section_comp['public_count']}</div></div>
+          <div class="card"><div class="k">内网主条款</div><div class="v">{section_comp['local_count']}</div></div>
+          <div class="card"><div class="k">公网子项</div><div class="v">{section_comp['public_child_count']}</div></div>
+          <div class="card"><div class="k">内网子项</div><div class="v">{section_comp['local_child_count']}</div></div>
         </div>
         <div class="twocol">
           <div>
@@ -676,6 +757,55 @@ def render_html(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html_content, encoding="utf-8")
+    manifest = {
+        "generatedAt": datetime.now().isoformat(timespec="seconds"),
+        "gitCommit": git_commit(),
+        "contract": {
+            "name": contract_path.name,
+            "sha256": file_sha256(contract_path),
+            "pages": max(len(public_pages), len(local_pages)),
+        },
+        "settings": {
+            "strictModelOutputs": env_value("STRICT_MODEL_OUTPUTS"),
+            "temperature": 0,
+            "sectionBatchSize": 2,
+            "internalParallelRequests": 2,
+            "ocrBaseline": "Paddle coordinates; VL semantic enhancement is reported separately",
+        },
+        "runs": {
+            "public": {
+                "profileId": public_run.profile_id,
+                "taskId": public_run.task_id,
+                "model": (public_run.result_payload.get("task") or {}).get("modelName"),
+                "elapsedMs": public_run.elapsed_ms,
+                "sections": len(public_sections),
+                "clauses": len(public_clauses),
+                "keyFacts": len(public_facts),
+                "auditFocuses": len(public_focuses),
+                "verificationItems": len(public_verification),
+                "runtimeSnapshot": public_run.runtime_snapshot,
+            },
+            "internal": {
+                "profileId": local_run.profile_id,
+                "taskId": local_run.task_id,
+                "model": (local_run.result_payload.get("task") or {}).get("modelName"),
+                "elapsedMs": local_run.elapsed_ms,
+                "sections": len(local_sections),
+                "clauses": len(local_clauses),
+                "keyFacts": len(local_facts),
+                "auditFocuses": len(local_focuses),
+                "verificationItems": len(local_verification),
+                "runtimeSnapshot": local_run.runtime_snapshot,
+            },
+        },
+        "pageTextComparison": {
+            "averageSimilarity": page_similarity_avg,
+            "publicChars": total_public_chars,
+            "internalChars": total_local_chars,
+            "relativeUnmatchedChars": total_missing_in_local,
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> None:
@@ -684,6 +814,8 @@ def main() -> None:
     parser.add_argument("--contract", default=None, help="Path to the target contract PDF.")
     parser.add_argument("--public-profile", default="public")
     parser.add_argument("--local-profile", default="internal")
+    parser.add_argument("--public-task-id", default=None, help="Reuse a completed persisted public task instead of running it.")
+    parser.add_argument("--local-task-id", default=None, help="Reuse a completed persisted internal task instead of running it.")
     parser.add_argument("--timeout-seconds", type=int, default=2400)
     parser.add_argument("--output", default=None, help="Output HTML path.")
     args = parser.parse_args()
@@ -695,9 +827,18 @@ def main() -> None:
     output_path = Path(args.output) if args.output else output_dir / f"technical-service-contract-compare-{stamp}.html"
 
     with httpx.Client(base_url=args.api_base, timeout=1200.0) as client:
-        public_run = run_profile(client, contract_path, args.public_profile, args.timeout_seconds)
-        local_run = run_profile(client, contract_path, args.local_profile, args.timeout_seconds)
-        switch_profile(client, args.public_profile)
+        public_run = (
+            load_profile_run_from_task(args.public_task_id, args.public_profile)
+            if args.public_task_id
+            else run_profile(client, contract_path, args.public_profile, args.timeout_seconds)
+        )
+        local_run = (
+            load_profile_run_from_task(args.local_task_id, args.local_profile)
+            if args.local_task_id
+            else run_profile(client, contract_path, args.local_profile, args.timeout_seconds)
+        )
+        if not args.public_task_id or not args.local_task_id:
+            switch_profile(client, args.public_profile)
 
     render_html(contract_path, public_run, local_run, output_path)
     print(output_path)

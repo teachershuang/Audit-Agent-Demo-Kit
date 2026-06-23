@@ -53,7 +53,7 @@ class QwenService:
                 },
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.2,
+            "temperature": 0,
         }
 
         data = await self._post_chat(payload=payload, timeout=timeout)
@@ -90,7 +90,7 @@ class QwenService:
                 }
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.1,
+            "temperature": 0,
         }
 
         data = await self._post_chat(payload=payload, timeout=timeout)
