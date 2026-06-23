@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from app.prompts.audit import build_audit_focus_prompt
+from app.config import Settings
 from app.prompts.context import build_relation_prompt_context
 from app.schemas.audit import AuditFocus
 from app.schemas.contract import ClauseTag, ContractSection, KeyFact
@@ -12,8 +13,9 @@ from app.services.qwen_service import QwenService
 
 
 class AuditFocusAgent:
-    def __init__(self, qwen_service: QwenService) -> None:
+    def __init__(self, qwen_service: QwenService, settings: Settings) -> None:
         self.qwen_service = qwen_service
+        self.settings = settings
 
     async def generate(
         self,
@@ -47,6 +49,8 @@ class AuditFocusAgent:
             raw_items.extend(self._pick_first_array(payload, ["auditFocuses", "关注事项", "audit_focuses"]))
 
         model_focuses = self._build_focuses_from_items(raw_items, clauses, non_rule_relations, clause_map)
+        if self.settings.strict_model_outputs:
+            return self._dedupe_audit_focuses(model_focuses)
         fallback_focuses = self._derive_relation_fallbacks(clauses, non_rule_relations)
         if model_focuses:
             return self._dedupe_audit_focuses(model_focuses + fallback_focuses)

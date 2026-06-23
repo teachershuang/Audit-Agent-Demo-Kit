@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     runtime_model_profile_default: str = "public"
     qwen_cache_enabled: bool = True
     qwen_cache_namespace: str = "qwen_v2_multistage"
+    strict_model_outputs: bool = False
     scanned_ocr_strategy: str = "vl_primary"
     enable_paddle_ocr: bool = True
     enable_vl_ocr_enhancement: bool = True

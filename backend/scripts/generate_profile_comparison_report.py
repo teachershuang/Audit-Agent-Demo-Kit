@@ -381,9 +381,9 @@ def render_html(
         ("合同页数", max(len(public_pages), len(local_pages))),
         ("公网总耗时", f"{public_run.elapsed_ms / 1000:.1f}s"),
         ("内网总耗时", f"{local_run.elapsed_ms / 1000:.1f}s"),
-        ("OCR 总字数", f"公网 {total_public_chars} / 内网 {total_local_chars}"),
+        ("页面文本总字数", f"公网 {total_public_chars} / 内网 {total_local_chars}"),
         ("平均页相似度", safe_pct(page_similarity_avg)),
-        ("内网相对少字", total_missing_in_local),
+        ("相对未匹配字符", total_missing_in_local),
     ]
 
     html_content = f"""<!doctype html>
@@ -479,7 +479,7 @@ def render_html(
     <div class="hero">
       <div class="badge">领导汇报版对比报告</div>
       <h1 class="title">技术服务合同解析性能对比</h1>
-      <p class="subtitle">对同一份扫描版《15-20220929 技术服务合同》分别走公网链路与内网链路，逐节点对比 OCR 文字量、章节还原、条款结构化、关键信息、审计关注点、校验链与执行耗时。由于源 PDF 无文本层，本报告中的“少字”判断以公网链路结果为参照。</p>
+      <p class="subtitle">对同一份扫描版《15-20220929 技术服务合同》分别走公网链路与内网链路，逐节点对比页面文本量、章节还原、条款结构化、关键信息、审计关注点、校验链与执行耗时。OCR 主链路统一视为 Paddle 坐标基线，VL 只作为语义补充/增强能力单独观察；由于源 PDF 无文本层，文本差异仅用于辅助判断，不作为绝对漏识别结论。</p>
       <div class="meta">
         <div class="chip"><div class="k">测试文件</div><div class="v">{esc(contract_path.name)}</div></div>
         <div class="chip"><div class="k">生成时间</div><div class="v">{esc(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}</div></div>
@@ -499,7 +499,7 @@ def render_html(
             <ul>
               <li>档位：{esc(public_run.profile_label)} / {esc(public_run.profile_id)}</li>
               <li>文本模型：{esc((public_run.runtime_snapshot.get("profiles") or [{{}}])[0].get("textModel", ""))}</li>
-              <li>OCR 策略：{esc((public_run.runtime_snapshot.get("profiles") or [{{}}])[0].get("ocrStrategy", ""))}</li>
+              <li>OCR 主链路：Paddle 坐标基线；VL 语义补充：{esc("开启" if (public_run.runtime_snapshot.get("profiles") or [{{}}])[0].get("enableVlOcrEnhancement") else "关闭")}</li>
               <li>任务编号：{esc(public_run.task_id)}</li>
             </ul>
           </div>
@@ -508,12 +508,12 @@ def render_html(
             <ul>
               <li>档位：{esc(local_run.profile_label)} / {esc(local_run.profile_id)}</li>
               <li>文本模型：{esc(next((p.get("textModel","") for p in local_run.runtime_snapshot.get("profiles", []) if p.get("id")==local_run.profile_id), ""))}</li>
-              <li>OCR 策略：{esc(next((p.get("ocrStrategy","") for p in local_run.runtime_snapshot.get("profiles", []) if p.get("id")==local_run.profile_id), ""))}</li>
+              <li>OCR 主链路：Paddle 坐标基线；VL 语义补充：{esc("开启" if next((p.get("enableVlOcrEnhancement") for p in local_run.runtime_snapshot.get("profiles", []) if p.get("id")==local_run.profile_id), False) else "关闭")}</li>
               <li>任务编号：{esc(local_run.task_id)}</li>
             </ul>
           </div>
         </div>
-        <p class="small">说明：本合同为扫描件，PDF 文本层为 0，因此“少字/漏识别”只能通过两条链路的 OCR 结果互相校验。</p>
+        <p class="small">说明：本合同为扫描件，PDF 文本层为 0。报告不把 OCR 拆成公网/内网能力对比，而是把页面文本作为共同输入基线，再观察 VL 语义补充、文本模型理解和后续 Agent 节点的差异。</p>
       </div>
       <div class="panel">
         <h2>二、原件预览</h2>
@@ -554,15 +554,15 @@ def render_html(
     </div>
 
     <div class="panel" style="margin-bottom:20px;">
-      <h2>五、OCR 与少字对比</h2>
+      <h2>五、页面文本对齐与 VL 补充观察</h2>
       <table>
         <thead>
           <tr>
             <th>页码</th>
-            <th>公网字数 / 块数</th>
-            <th>内网字数 / 块数</th>
+            <th>公网页面文本 / 块数</th>
+            <th>内网页面文本 / 块数</th>
             <th>页相似度</th>
-            <th>内网相对少字</th>
+            <th>相对未匹配字符</th>
             <th>文本预览</th>
           </tr>
         </thead>
@@ -650,9 +650,9 @@ def render_html(
     <div class="panel" style="margin-top:20px;">
       <h2>十、汇报建议</h2>
       <ul>
-        <li>如果领导重点关注“扫描件识别稳定性”，优先看第四部分的页级少字与相似度表。</li>
-        <li>如果领导重点关注“结构理解能力”，优先看第五部分章节顺序与缺失章节。</li>
-        <li>如果领导重点关注“后续规则引擎接入价值”，优先看第六部分关键字段一致性和第八部分校验链分布。</li>
+        <li>如果领导重点关注“扫描件输入稳定性”，优先看第五部分的页面文本对齐表；这里反映共同 OCR 基线和 VL 语义增强后的输入差异。</li>
+        <li>如果领导重点关注“结构理解能力”，优先看第六部分章节顺序与缺失章节。</li>
+        <li>如果领导重点关注“后续规则引擎接入价值”，优先看第七部分关键字段一致性和第九部分校验链分布。</li>
         <li>建议汇报时把公网链路作为演示上限，把内网链路作为可私有化落地基线，强调两阶段章节重构已经把“看图”和“全局合并”拆开，后续可继续增强本地多模态候选识别能力。</li>
       </ul>
     </div>

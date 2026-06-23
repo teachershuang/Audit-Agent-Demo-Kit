@@ -107,6 +107,8 @@ class ContractParserAgent:
         }
         if sections:
             return sections
+        if self.settings.strict_model_outputs:
+            raise RuntimeError("Section reconstruction returned no model sections in strict model output mode.")
         return self._derive_sections_locally(pages)
 
     async def identify_clauses(
@@ -127,6 +129,8 @@ class ContractParserAgent:
         clauses = self._build_clauses_from_items(flattened, pages, sections)
         if clauses:
             return self._dedupe_clauses(clauses)
+        if self.settings.strict_model_outputs:
+            raise RuntimeError("Clause tagging returned no model clauses in strict model output mode.")
         return self._dedupe_clauses(self._derive_clauses_locally(pages, sections))
 
     async def extract_key_facts(
@@ -137,8 +141,12 @@ class ContractParserAgent:
     ) -> list[KeyFact]:
         relations = relations or []
         requested_fields = self._extract_requested_fact_fields(relations)
-        derived_facts = self._dedupe_key_facts(
-            self._derive_key_facts_from_pages(pages) + self._derive_key_facts_from_clauses(clauses)
+        derived_facts = (
+            []
+            if self.settings.strict_model_outputs
+            else self._dedupe_key_facts(
+                self._derive_key_facts_from_pages(pages) + self._derive_key_facts_from_clauses(clauses)
+            )
         )
 
         overview_task = self._request_overview_key_facts(pages, clauses)

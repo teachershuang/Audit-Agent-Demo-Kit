@@ -156,6 +156,7 @@ class RuntimeModelProfileService:
                     "visionModel": profile.qwen_vision_model_name or None,
                     "reviewModel": profile.llm_model,
                     "ocrStrategy": profile.scanned_ocr_strategy,
+                    "enableVlOcrEnhancement": profile.enable_vl_ocr_enhancement,
                     "paddleMode": profile.paddle_service_mode,
                     "paddleRemoteBaseUrl": profile.paddle_remote_base_url or None,
                 }
